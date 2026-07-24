@@ -12,7 +12,7 @@ ROOT = get_app_root()
 SETTINGS_PATH = os.path.join(ROOT, "config", "settings.yaml")
 
 _DEFAULTS = {
-    "app": {"name": "密桥", "name_en": "CipherBridge", "version": "1.0"},
+    "app": {"name": "密桥", "name_en": "CipherBridge", "version": "3.1"},
     "proxy": {
         "default_decrypt_port": 8080,
         "default_encrypt_port": 8081,

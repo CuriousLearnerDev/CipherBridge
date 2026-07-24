@@ -1,4 +1,4 @@
-"""小程序反编译面板 — 头像+名称列表，旁侧解包按钮，AI 识别加解密."""
+"""小程序反编译面板 — 头像+名称列表，旁侧解包；识别/生成在右侧 Agent."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from PyQt6.QtGui import QPixmap, QIcon, QPainter, QColor, QFont
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QPlainTextEdit, QFileDialog, QMessageBox, QCheckBox, QSpinBox,
-    QListWidget, QListWidgetItem, QFrame, QTabWidget,
+    QListWidget, QListWidgetItem, QFrame, QTabWidget, QLineEdit,
 )
 
 from core.theme import style_button, style_muted_label, style_sidebar_aux_button, C
@@ -191,9 +191,33 @@ class MiniprogramPanel(QWidget):
         self.sys_proxy_check = QCheckBox("系统代理")
         self.sys_proxy_check.setChecked(system_proxy_supported())
         self.sys_proxy_check.setEnabled(system_proxy_supported())
-        self.sys_proxy_check.setToolTip("停止时自动恢复；若无流量请退出微信重开")
+        self.sys_proxy_check.setToolTip(
+            "会接管本机 HTTP(S)；列表只显示下方过滤后的流量。"
+            "停止时自动恢复；若无流量请退出微信重开"
+        )
         cap.addWidget(self.sys_proxy_check)
         layout.addLayout(cap)
+
+        filt_row = QHBoxLayout()
+        filt_row.setSpacing(6)
+        self.filter_edit = QLineEdit()
+        self.filter_edit.setPlaceholderText(
+            "过滤：域名/关键字，逗号分隔；留空=全部。例: api.xxx.com, *.myapp.cn"
+        )
+        self.filter_edit.setToolTip(
+            "只记录匹配的 URL/Host。支持子串与 *.example.com。"
+            "改完即时生效；系统代理仍会转发其它流量，只是不写入列表。"
+        )
+        self.filter_edit.textChanged.connect(self._on_filter_changed)
+        filt_row.addWidget(self.filter_edit, 1)
+        self.noise_check = QCheckBox("屏蔽噪音")
+        self.noise_check.setChecked(True)
+        self.noise_check.setToolTip(
+            "默认忽略 Windows/微软/谷歌/苹果等系统更新与常见广告域名"
+        )
+        self.noise_check.toggled.connect(self._on_filter_changed)
+        filt_row.addWidget(self.noise_check)
+        layout.addLayout(filt_row)
 
         # —— 解包列表（主操作） ——
         list_head = QHBoxLayout()
@@ -251,17 +275,13 @@ class MiniprogramPanel(QWidget):
         self.log_view.setMaximumBlockCount(1500)
         self.log_view.setPlaceholderText("解包 / 抓包日志")
         detail_tabs.addTab(self.log_view, "日志")
-        detail_tabs.setMaximumHeight(150)
+        detail_tabs.setMinimumHeight(250)
         layout.addWidget(detail_tabs)
 
-        self.ai_btn = QPushButton("AI 识别加解密")
-        self.ai_btn.setToolTip("用解包 JS + 已抓流量，在右侧分析（也可直接点「生成解密代理」）")
-        self.ai_btn.setEnabled(False)
-        self.ai_btn.clicked.connect(self._on_ai_recognize)
-        style_button(self.ai_btn, "primary")
-        set_btn_icon(self.ai_btn, "code")
-        self.ai_btn.setMinimumHeight(40)
-        layout.addWidget(self.ai_btn)
+        tip = QLabel("解包/抓包完成后，到右侧 Agent 页识别或生成代理")
+        style_muted_label(tip)
+        tip.setWordWrap(True)
+        layout.addWidget(tip)
 
     def _log(self, text: str):
         self.log_view.appendPlainText(text)
@@ -303,7 +323,6 @@ class MiniprogramPanel(QWidget):
             self.app_list.setItemWidget(item, row)
         self.status.setText(f"已扫描 {len(self._apps)} 个 — 点「解包」反编译，建议配合抓包")
         self._log(f"刷新列表: {len(self._apps)} 个")
-        self._refresh_ai_btn()
 
     def _set_rows_enabled(self, enabled: bool):
         self.app_list.setEnabled(enabled)
@@ -315,7 +334,6 @@ class MiniprogramPanel(QWidget):
             return
         self._busy = True
         self._set_rows_enabled(False)
-        self.ai_btn.setEnabled(False)
         self.open_btn.setEnabled(False)
         self.hit_list.clear()
         self.preview.clear()
@@ -337,7 +355,6 @@ class MiniprogramPanel(QWidget):
         self._set_rows_enabled(True)
         self._last_result = result
         self.open_btn.setEnabled(True)
-        self.ai_btn.setEnabled(True)
         self.status.setText(f"解包完成 → {result.out_dir}")
         self._log(f"输出: {result.out_dir}")
         self.hit_list.clear()
@@ -346,10 +363,9 @@ class MiniprogramPanel(QWidget):
             item.setData(Qt.ItemDataRole.UserRole, h.path)
             self.hit_list.addItem(item)
         if not result.crypto_hits:
-            self._log("未筛到明显加解密关键字，仍可点「AI 识别」让模型通读脚本。")
+            self._log("未筛到明显加解密关键字，可到右侧 Agent 页「AI识别加解密」。")
         self._emit_scripts(silent=True)
         self._update_item_title(result.appid)
-        self._refresh_ai_btn()
 
     def _update_item_title(self, appid: str):
         from core.wxapkg.pipeline import guess_miniprogram_title
@@ -430,21 +446,14 @@ class MiniprogramPanel(QWidget):
         self._log(f"已载入 {len(scripts)} 个脚本到分析区")
         return True
 
-    def _on_ai_recognize(self):
-        # 有流量时也可只凭流量分析；有解包结果则一并载入脚本
-        if self._last_result:
-            if not self._emit_scripts(silent=False):
-                return
-        elif self._local_flow_count <= 0:
-            QMessageBox.information(
-                self, "提示",
-                "请先「解包」载入 JS，或「启动抓包」采集小程序流量后再识别。",
-            )
-            return
-        self.status.setText("正在请求 AI 识别…")
-        self.request_ai_analyze.emit()
-
     # —— 抓包 ——
+    def _on_filter_changed(self, *_args):
+        if self._capture:
+            self._capture.set_capture_filter(
+                self.filter_edit.text().strip(),
+                block_noise=self.noise_check.isChecked(),
+            )
+
     def _toggle_capture(self):
         if self._capture and self._capture.running:
             self._stop_capture()
@@ -461,7 +470,12 @@ class MiniprogramPanel(QWidget):
             self._capture.stopped.connect(self._on_capture_stopped)
             self._capture.failed.connect(self._on_capture_failed)
         port = int(self.capture_port.value())
-        self._capture.start(port, use_system_proxy=self.sys_proxy_check.isChecked())
+        self._capture.start(
+            port,
+            use_system_proxy=self.sys_proxy_check.isChecked(),
+            host_filter=self.filter_edit.text().strip(),
+            block_noise=self.noise_check.isChecked(),
+        )
 
     def _stop_capture(self):
         if self._capture:
@@ -475,8 +489,14 @@ class MiniprogramPanel(QWidget):
         self.sys_proxy_check.setEnabled(False)
         self.status.setText(f"抓包中 :{port} — 请打开微信小程序操作")
         self._log(f"抓包已启动 127.0.0.1:{port}")
+        filt = self.filter_edit.text().strip()
+        if filt:
+            self._log(f"仅记录匹配: {filt}")
+        if self.noise_check.isChecked():
+            self._log("已屏蔽常见系统噪音域名")
         if self.sys_proxy_check.isChecked() and system_proxy_supported():
             self._log("已开启系统代理；若微信无流量，请完全退出微信后重开。")
+            self._log("提示：系统代理仍会转发全机流量，列表只显示过滤后的请求。")
 
     def _on_capture_stopped(self):
         self.capture_btn.setText("启动抓包")
@@ -514,7 +534,6 @@ class MiniprogramPanel(QWidget):
         self.flow_list.addItem(item)
         self.flow_captured.emit(flow)
         self.status.setText(f"抓包中 · 已采 {self._local_flow_count} 条")
-        self._refresh_ai_btn()
 
     def _on_capture_flow_updated(self, flow: dict):
         idx = flow.get("_index")
@@ -531,10 +550,6 @@ class MiniprogramPanel(QWidget):
                     )
         self.flow_updated.emit(flow)
 
-    def _refresh_ai_btn(self):
-        ready = bool(self._last_result) or self._local_flow_count > 0
-        self.ai_btn.setEnabled(ready)
-
     def _on_local_flow_clicked(self, item: QListWidgetItem):
         idx = item.data(Qt.ItemDataRole.UserRole)
         if isinstance(idx, int) and 0 <= idx < len(self._local_flows):
@@ -544,7 +559,6 @@ class MiniprogramPanel(QWidget):
         self.flow_list.clear()
         self._local_flows.clear()
         self._local_flow_count = 0
-        self._refresh_ai_btn()
 
     def stop_capture_if_running(self):
         if self._capture and self._capture.running:

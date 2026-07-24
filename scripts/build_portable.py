@@ -237,7 +237,7 @@ def _write_readme(dest: Path, *, with_chromium: bool) -> None:
   sdk/            加解密函数库（插件引用）
   ms-playwright/  内置 Chromium（AI 自动化分析）
 
-由 知攻善防实验室 · W啥都学 设计开发
+作者：W啥都学
 """,
         encoding="utf-8",
     )

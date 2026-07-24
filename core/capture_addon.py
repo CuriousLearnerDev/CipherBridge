@@ -11,8 +11,27 @@ from typing import Any
 
 from mitmproxy import http
 
+try:
+    from core.capture_filter import (
+        load_allow_from_env,
+        load_block_noise_from_env,
+        should_capture_url,
+    )
+except Exception:  # pragma: no cover - 独立 -s 加载时兜底
+    from capture_filter import (  # type: ignore
+        load_allow_from_env,
+        load_block_noise_from_env,
+        should_capture_url,
+    )
+
 MAX_BODY = 80_000
 PREFIX = "CB_FLOW|"
+_ALLOW = load_allow_from_env()
+_BLOCK_NOISE = load_block_noise_from_env()
+
+
+def _want(url: str) -> bool:
+    return should_capture_url(url, allow_patterns=_ALLOW, block_noise=_BLOCK_NOISE)
 
 
 def _body_text(raw: bytes | None) -> str:
@@ -42,12 +61,15 @@ def _emit(payload: dict) -> None:
 def request(flow: http.HTTPFlow) -> None:
     if flow.request.method == "CONNECT":
         return
+    url = flow.request.pretty_url
+    if not _want(url):
+        return
     _emit(
         {
             "phase": "request",
             "key": getattr(flow, "id", None) or id(flow),
             "method": flow.request.method,
-            "url": flow.request.pretty_url,
+            "url": url,
             "request_body": _body_text(flow.request.raw_content or flow.request.content),
             "request_headers": _headers(flow.request.headers),
             "response_body": "(等待响应…)",
@@ -64,12 +86,15 @@ def response(flow: http.HTTPFlow) -> None:
     resp = flow.response
     if resp is None:
         return
+    url = flow.request.pretty_url
+    if not _want(url):
+        return
     _emit(
         {
             "phase": "response",
             "key": getattr(flow, "id", None) or id(flow),
             "method": flow.request.method,
-            "url": flow.request.pretty_url,
+            "url": url,
             "request_body": _body_text(flow.request.raw_content or flow.request.content),
             "request_headers": _headers(flow.request.headers),
             "response_body": _body_text(resp.raw_content or resp.content),

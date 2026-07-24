@@ -157,9 +157,33 @@ def _clean_steps(result: dict, role: str = "decrypt") -> dict:
     return result
 
 
-def _select_scripts_text(scripts: dict[str, str], max_files: int = 10, max_chars: int = 24000) -> str:
+def _select_scripts_text(
+    scripts: dict[str, str],
+    max_files: int = 10,
+    max_chars: int = 24000,
+    *,
+    user_selected: bool = False,
+) -> str:
     if not scripts:
         return "(无页面 JS)"
+    # 用户勾选：尽量全量送入，按文件均分额度
+    if user_selected:
+        urls = list(scripts.items())
+        per = max(2500, max_chars // max(len(urls), 1))
+        parts: list[str] = []
+        total = 0
+        for url, content in urls[: max(max_files, 30)]:
+            chunk = content[:per]
+            if total + len(chunk) > max_chars:
+                chunk = chunk[: max(0, max_chars - total)]
+            if not chunk:
+                break
+            parts.append(f"\n--- JS(已选): {url} ---\n{chunk}")
+            total += len(chunk)
+            if total >= max_chars:
+                break
+        return "\n".join(parts) if parts else "(无相关 JS)"
+
     ranked: list[tuple[int, str, str]] = []
     for url, content in scripts.items():
         score = 0
@@ -181,7 +205,7 @@ def _select_scripts_text(scripts: dict[str, str], max_files: int = 10, max_chars
         (1, u, c) for u, c in list(scripts.items())[:5]
     ]
     ranked.sort(key=lambda x: x[0], reverse=True)
-    parts: list[str] = []
+    parts = []
     total = 0
     for score, url, content in ranked[:max_files]:
         chunk = content[:4000]
@@ -210,22 +234,53 @@ def build_analysis_prompt(
     scripts: dict[str, str] | None = None,
     focus_hook: bool = False,
     focus_miniprogram: bool = False,
+    *,
+    user_selected_flows: bool = False,
+    user_selected_scripts: bool = False,
 ) -> str:
     ext = get_extension_choices()
     types = BUILTIN_STEP_TYPES + ext
     types_text = "\n".join(f"- {t}" for t in types)
 
+    # 调用方已筛选时尽量全送；自动模式仍做上限保护
+    flow_cap = 30 if user_selected_flows else 12
+    n_flow = min(len(flows), flow_cap)
+    if n_flow <= 3:
+        body_lim = 6000
+    elif n_flow <= 8:
+        body_lim = 3500
+    else:
+        body_lim = 2000
+
     flows_text = ""
-    for i, f in enumerate(flows[:8]):
+    for i, f in enumerate(flows[:flow_cap]):
         flows_text += f"\n--- Flow #{i+1} ---\n"
         flows_text += f"{f.get('method')} {f.get('url')}\n"
         flows_text += f"Request Headers:\n{_format_headers(f.get('request_headers'))}\n"
-        flows_text += f"Request Body: {f.get('request_body', '')[:2000]}\n"
+        flows_text += f"Request Body: {f.get('request_body', '')[:body_lim]}\n"
         flows_text += f"Response Headers:\n{_format_headers(f.get('response_headers'))}\n"
-        flows_text += f"Response Body ({f.get('status')}): {f.get('response_body', '')[:2000]}\n"
+        flows_text += f"Response Body ({f.get('status')}): {f.get('response_body', '')[:body_lim]}\n"
+    if len(flows) > flow_cap:
+        flows_text += f"\n(另有 {len(flows) - flow_cap} 条流量未送入，请缩小勾选)\n"
+
+    sel_note = ""
+    if user_selected_flows or user_selected_scripts:
+        parts = []
+        if user_selected_flows:
+            parts.append(f"流量 {n_flow} 条（用户勾选）")
+        if user_selected_scripts:
+            parts.append(f"JS {len(scripts or {})} 个（用户勾选）")
+        sel_note = f"\n**素材范围**: {', '.join(parts)}。请主要依据这些材料分析，勿臆造未出现的字段。\n"
 
     hooks_text = "\n".join(hook_lines[-120:]) if hook_lines else "(无 Hook 日志)"
-    scripts_text = _select_scripts_text(scripts or {})
+    script_budget = 48000 if user_selected_scripts else 24000
+    script_files = max(len(scripts or {}), 10) if user_selected_scripts else 10
+    scripts_text = _select_scripts_text(
+        scripts or {},
+        max_files=script_files,
+        max_chars=script_budget,
+        user_selected=user_selected_scripts,
+    )
 
     focus_note = ""
     if focus_miniprogram:
@@ -269,7 +324,7 @@ def build_analysis_prompt(
         )
 
     return f"""目标角色: {role} 端代理
-{focus_note}{role_note}
+{sel_note}{focus_note}{role_note}
 可用步骤类型:
 {types_text}
 
@@ -374,6 +429,9 @@ def build_initial_messages(
     scripts: dict[str, str] | None = None,
     focus_hook: bool = False,
     focus_miniprogram: bool = False,
+    *,
+    user_selected_flows: bool = False,
+    user_selected_scripts: bool = False,
 ) -> list[dict]:
     return [
         {"role": "system", "content": system_prompt_for_role(role)},
@@ -382,6 +440,8 @@ def build_initial_messages(
             "content": build_analysis_prompt(
                 flows, hook_lines, role, scripts=scripts,
                 focus_hook=focus_hook, focus_miniprogram=focus_miniprogram,
+                user_selected_flows=user_selected_flows,
+                user_selected_scripts=user_selected_scripts,
             ),
         },
     ]
@@ -414,19 +474,30 @@ def _stream_analyze(
     scripts: dict[str, str] | None = None,
     focus_hook: bool = False,
     focus_miniprogram: bool = False,
+    *,
+    user_selected_flows: bool = False,
+    user_selected_scripts: bool = False,
 ) -> str:
     def log(msg: str):
         if on_log:
             on_log(msg)
 
+    sel = []
+    if user_selected_flows:
+        sel.append(f"勾选流量 {len(flows)}")
+    if user_selected_scripts:
+        sel.append(f"勾选 JS {len(scripts or {})}")
+    scope = f"（{' · '.join(sel)}）" if sel else "（自动挑选）"
     log(
         f"数据: {len(flows)} 条流量, {len(hook_lines)} 条 Hook, "
-        f"{len(scripts or {})} 个 JS 文件"
+        f"{len(scripts or {})} 个 JS 文件 {scope}"
     )
     log("正在组装 Prompt…")
     messages = build_initial_messages(
         flows, hook_lines, role, scripts=scripts,
         focus_hook=focus_hook, focus_miniprogram=focus_miniprogram,
+        user_selected_flows=user_selected_flows,
+        user_selected_scripts=user_selected_scripts,
     )
 
     url, headers, proxies, body = _build_request(cfg, messages)
@@ -551,6 +622,9 @@ class AIAnalysisWorker(QThread):
         scripts: dict[str, str] | None = None,
         focus_hook: bool = False,
         focus_miniprogram: bool = False,
+        *,
+        user_selected_flows: bool = False,
+        user_selected_scripts: bool = False,
         parent=None,
     ):
         super().__init__(parent)
@@ -562,6 +636,8 @@ class AIAnalysisWorker(QThread):
         self.scripts = scripts or {}
         self.focus_hook = focus_hook
         self.focus_miniprogram = focus_miniprogram
+        self.user_selected_flows = user_selected_flows
+        self.user_selected_scripts = user_selected_scripts
 
     def run(self):
         try:
@@ -583,6 +659,8 @@ class AIAnalysisWorker(QThread):
                     scripts=self.scripts,
                     focus_hook=self.focus_hook,
                     focus_miniprogram=self.focus_miniprogram,
+                    user_selected_flows=self.user_selected_flows,
+                    user_selected_scripts=self.user_selected_scripts,
                 )
             result = _clean_steps(_extract_json(full), self.role)
             self.log.emit(

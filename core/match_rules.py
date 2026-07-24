@@ -69,10 +69,11 @@ def generate_match_guard_code(match: dict[str, Any]) -> str:
     if not match:
         return ""
     return f'''MATCH_RULES = {match!r}
+_MATCH_MISS_LOGGED = 0
 
 def _should_process(flow: http.HTTPFlow) -> bool:
     from core.match_rules import matches_request
-    return matches_request(
+    ok = matches_request(
         MATCH_RULES,
         host=flow.request.host,
         path=flow.request.path,
@@ -80,5 +81,16 @@ def _should_process(flow: http.HTTPFlow) -> bool:
         content_type=flow.request.headers.get("Content-Type", ""),
         body_text=flow.request.text or "",
     )
+    if not ok:
+        global _MATCH_MISS_LOGGED
+        if _MATCH_MISS_LOGGED < 5:
+            _MATCH_MISS_LOGGED += 1
+            print(
+                f"跳过(未匹配规则): {{flow.request.method}} "
+                f"{{flow.request.host}}{{flow.request.path}}"
+            )
+            if _MATCH_MISS_LOGGED == 5:
+                print("跳过(未匹配规则): 后续同类提示已省略，请检查 profiles 的 match 或左侧「规则」")
+    return ok
 
 '''

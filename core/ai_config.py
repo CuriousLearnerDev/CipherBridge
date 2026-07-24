@@ -17,6 +17,9 @@ DEFAULT = {
     "model": "deepseek-chat",
     "http_proxy": "127.0.0.1:7897",
     "use_http_proxy": False,
+    # Agent（Anthropic Messages + tools）；空则从 base_url 推导
+    "agent_base_url": "",
+    "agent_max_steps": 15,
     "browser": {
         "hook_enabled": True,
         "headless": False,
@@ -25,6 +28,28 @@ DEFAULT = {
         "last_url": "",
     },
 }
+
+
+def resolve_agent_base_url(cfg: dict) -> str:
+    """一键分析用 OpenAI /v1；Agent 用 Anthropic 兼容端点."""
+    explicit = str(cfg.get("agent_base_url") or "").strip().rstrip("/")
+    if explicit:
+        return explicit
+    base = str(cfg.get("base_url") or "").strip().rstrip("/")
+    if not base:
+        return "https://api.deepseek.com/anthropic"
+    low = base.lower()
+    if "deepseek.com" in low:
+        # https://api.deepseek.com/v1 → /anthropic
+        if low.endswith("/v1"):
+            return base[: -len("/v1")] + "/anthropic"
+        if low.endswith("/anthropic"):
+            return base
+        return base + "/anthropic"
+    if low.endswith("/v1"):
+        # 其它 OpenAI 风格网关：尝试同主机 /anthropic（调用方仍可写 agent_base_url）
+        return base
+    return base
 
 
 def load_ai_config() -> dict:

@@ -117,7 +117,10 @@ class MitmEngine:
     def request(self, flow: http.HTTPFlow) -> None:
         profile_name = self._resolve_profile(flow)
         if not profile_name:
-            _cp_log(f"未匹配项目，跳过: {flow.request.method} {flow.request.host}{flow.request.path}")
+            _cp_log(
+                f"未匹配项目，跳过: {flow.request.method} {flow.request.host}{flow.request.path}"
+                f" （请检查 profiles 匹配规则 / 左侧「规则」）"
+            )
             return
         _cp_log(f"处理请求: {profile_name} | {flow.request.method} {flow.request.host}{flow.request.path}")
         self._call_plugin(profile_name, flow, "request")

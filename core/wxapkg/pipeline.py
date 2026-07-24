@@ -30,7 +30,7 @@ class DecompileResult:
     crypto_hits: list[ScriptHit] = field(default_factory=list)
     messages: list[str] = field(default_factory=list)
 
-    def scripts_for_ai(self, max_chars: int = 14_000) -> dict[str, str]:
+    def scripts_for_ai(self, max_chars: int = 120_000) -> dict[str, str]:
         return scripts_as_dict(self.crypto_hits, max_chars=max_chars)
 
 

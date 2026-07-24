@@ -30,7 +30,11 @@ from PyQt6.QtGui import QFont, QTextCursor, QColor, QPalette
 
 from core.paths import get_app_root
 
-sys.path.insert(0, os.path.dirname(__file__) if not getattr(sys, "frozen", False) else get_app_root())
+_APP_ROOT = os.path.dirname(__file__) if not getattr(sys, "frozen", False) else get_app_root()
+sys.path.insert(0, _APP_ROOT)
+_VENDOR = os.path.join(_APP_ROOT, "vendor")
+if os.path.isdir(_VENDOR) and _VENDOR not in sys.path:
+    sys.path.insert(0, _VENDOR)
 from algorithms import create_algorithm
 from codegen import generate_code_from_steps, parse_code_to_steps, codegen_for_pipeline, get_codegen_role
 from core.http_message import HTTP_LOG_BEGIN, HTTP_LOG_END, HTTP_LOG_BLANK
@@ -44,6 +48,10 @@ from core.brand import APP_TITLE
 from core.home_tab import HomeTab
 from core.cert_helper import install_https_cert, is_cert_trusted, cert_status_text, auto_install_if_needed
 from core.match_dialog import MatchRulesDialog
+from core.launch_checks import (
+    is_port_in_use, port_in_use_message, check_roles, check_cert_before_decrypt,
+    match_startup_tips, diagnose_proxy_line, exit_code_hint, load_profile,
+)
 from core.settings_dialog import SettingsDialog
 from core.settings_tab import SettingsHubTab
 from core.project_name import normalize_project_name
@@ -86,6 +94,14 @@ def _resolve_mitmdump() -> str:
         if os.path.isfile(cand):
             return cand
     return shutil.which("mitmdump") or "mitmdump"
+
+
+def _mitmdump_available() -> bool:
+    path = _resolve_mitmdump()
+    if path and path != "mitmdump" and os.path.isfile(path):
+        return True
+    import shutil
+    return bool(shutil.which("mitmdump"))
 
 
 def _profile_from_window(window=None) -> str:
@@ -264,15 +280,15 @@ class ControlPanel(QFrame):
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(6)
+        layout.setContentsMargins(10, 8, 10, 10)
+        layout.setSpacing(4)
 
         build_logo_header(layout)
 
         # ---- 项目选择 ----
-        project_grp = QGroupBox("项目选择")
+        project_grp = QGroupBox("项目")
         pj_layout = QVBoxLayout(project_grp)
-        pj_layout.setContentsMargins(6, 10, 6, 6)
+        pj_layout.setContentsMargins(0, 8, 0, 4)
         pj_layout.setSpacing(5)
         self.profile_combo = QComboBox()
         self.profile_combo.currentTextChanged.connect(self._on_profile_changed)
@@ -313,9 +329,9 @@ class ControlPanel(QFrame):
         # ---- 解密端 ----
         decrypt_grp = QGroupBox("解密端")
         d_layout = QVBoxLayout(decrypt_grp)
-        d_layout.setContentsMargins(6, 10, 6, 6)
+        d_layout.setContentsMargins(0, 8, 0, 4)
         d_layout.setSpacing(5)
-        self.decrypt_status = QLabel("○ 已停止")
+        self.decrypt_status = QLabel("已停止")
         style_status_label(self.decrypt_status, running=False)
         d_layout.addWidget(self.decrypt_status)
         d_row = QHBoxLayout()
@@ -362,9 +378,9 @@ class ControlPanel(QFrame):
 
         encrypt_grp = QGroupBox("加密端")
         e_layout = QVBoxLayout(encrypt_grp)
-        e_layout.setContentsMargins(6, 10, 6, 6)
+        e_layout.setContentsMargins(0, 8, 0, 4)
         e_layout.setSpacing(5)
-        self.encrypt_status = QLabel("○ 已停止")
+        self.encrypt_status = QLabel("已停止")
         style_status_label(self.encrypt_status, running=False)
         e_layout.addWidget(self.encrypt_status)
         e_row = QHBoxLayout()
@@ -464,11 +480,11 @@ class ControlPanel(QFrame):
             alg = cfg.get("request", {}).get("encryption", {}).get("algorithm", "?")
             summary = f"插件: {plugin} | 算法: {alg}"
             if "decrypt" in roles and "encrypt" in roles:
-                summary += " | 🔓解密 + 🔒加密"
+                summary += " | 解密+加密"
             elif "decrypt" in roles:
-                summary += " | 🔓解密"
+                summary += " | 解密"
             else:
-                summary += " | 🔒加密"
+                summary += " | 加密"
             match = cfg.get("match", {})
             hosts = match.get("host") or []
             paths = match.get("path") or []
@@ -544,12 +560,12 @@ class ControlPanel(QFrame):
 
     def set_decrypt_running(self, r: bool):
         if r:
-            self.decrypt_status.setText("● 运行中")
+            self.decrypt_status.setText("运行中")
             style_status_label(self.decrypt_status, running=True)
             self.decrypt_start_btn.setEnabled(False); self.decrypt_stop_btn.setEnabled(True)
             self.decrypt_port.setEnabled(False)
         else:
-            self.decrypt_status.setText("○ 已停止")
+            self.decrypt_status.setText("已停止")
             style_status_label(self.decrypt_status, running=False)
             self.decrypt_start_btn.setEnabled(True); self.decrypt_stop_btn.setEnabled(False)
             self.decrypt_port.setEnabled(True)
@@ -557,12 +573,12 @@ class ControlPanel(QFrame):
 
     def set_encrypt_running(self, r: bool):
         if r:
-            self.encrypt_status.setText("● 运行中")
+            self.encrypt_status.setText("运行中")
             style_status_label(self.encrypt_status, running=True)
             self.encrypt_start_btn.setEnabled(False); self.encrypt_stop_btn.setEnabled(True)
             self.encrypt_port.setEnabled(False)
         else:
-            self.encrypt_status.setText("○ 已停止")
+            self.encrypt_status.setText("已停止")
             style_status_label(self.encrypt_status, running=False)
             self.encrypt_start_btn.setEnabled(True); self.encrypt_stop_btn.setEnabled(False)
             self.encrypt_port.setEnabled(True)
@@ -619,24 +635,11 @@ class ControlPanel(QFrame):
             return
 
         profile = combo.currentText()
-        if role == "decrypt":
-            roles = self._profile_roles(profile)
-            if roles and "decrypt" not in roles:
-                QMessageBox.warning(
-                    self, "角色不匹配",
-                    f"项目「{profile}」仅配置了 {roles} 端，没有解密端。\n"
-                    "解密端启动后插件不会修改请求体，请换项目或编辑 profiles 配置。",
-                )
-                return
-        elif role == "encrypt":
-            roles = self._profile_roles(profile)
-            if roles and "encrypt" not in roles:
-                QMessageBox.warning(
-                    self, "角色不匹配",
-                    f"项目「{profile}」仅配置了 {roles} 端，没有加密端。\n"
-                    "请换项目或编辑 profiles 配置。",
-                )
-                return
+        ok, msg = check_roles(profile, role)
+        if not ok:
+            QMessageBox.warning(self, "角色不可用", msg)
+            log_signal.append_log.emit("WARNING", msg.replace("\n", " | "))
+            return
         if role == "decrypt":
             self.start_decrypt.emit(port, profile)
         else:
@@ -2963,10 +2966,14 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(APP_TITLE)
-        self.setMinimumSize(1280, 750); self.resize(1580, 780)
+        self.setMinimumSize(1280, 800); self.resize(1580, 860)
         self.decrypt_process = None; self.encrypt_process = None
         self._output_buffer = ""
         self._tls_warned = False
+        self._match_miss_warned = False
+        self._proxy_fail_tips: set[str] = set()
+        self._decrypt_user_stop = False
+        self._encrypt_user_stop = False
         self._http_log_buffer = None
         self._http_log_tag = ""
         self._mitm_line_prefix = re.compile(r"^\[\d{2}:\d{2}:\d{2}\.\d+\]\s*")
@@ -2994,22 +3001,24 @@ class MainWindow(QMainWindow):
         self.tabs=QTabWidget()
         setup_main_tabs(self.tabs)
         self.home_tab=HomeTab()
-        self.tabs.addTab(self.home_tab, icon("home", tint=C["accent"]), "主页")
-        self.ai_lab_tab=AILabTab()
-        self.tabs.addTab(self.ai_lab_tab, icon("code", tint=C["accent"]), "AI自动化分析")
+        _tint = C["text_dim"]
+        self.tabs.addTab(self.home_tab, icon("home", tint=_tint), "主页")
         self.parser_tab=RequestParserTab()
-        self.tabs.addTab(self.parser_tab, icon("upload", tint=C["accent"]), "请求解析器")
+        self.tabs.addTab(self.parser_tab, icon("upload", tint=_tint), "请求解析器")
         self.visual_builder_tab=VisualBuilderTab()
-        self.tabs.addTab(self.visual_builder_tab, icon("builder", tint=C["teal"]), "可视化构建器")
+        self.tabs.addTab(self.visual_builder_tab, icon("builder", tint=_tint), "可视化构建器")
+        self.ai_lab_tab=AILabTab()
+        self.tabs.addTab(self.ai_lab_tab, icon("code", tint=_tint), "AI自动化分析")
         self.plugin_editor_tab=ExtensionEditorTab()
-        self.tabs.addTab(self.plugin_editor_tab, icon("plugin", tint=C["purple"]), "插件编辑器")
+        self.tabs.addTab(self.plugin_editor_tab, icon("plugin", tint=_tint), "插件编辑器")
         self.analyzer_tab=CryptoAnalyzerTab()
+        self.tabs.addTab(self.analyzer_tab, icon("analyzer", tint=_tint), "加密分析")
         self.crypto_tab=CryptoTab()
         self.log_tab=LogTab()
         self.settings_hub_tab=SettingsHubTab(
-            self.control, self.analyzer_tab, self.crypto_tab, self.log_tab,
+            self.control, self.crypto_tab, self.log_tab,
         )
-        self.tabs.addTab(self.settings_hub_tab, icon("setting", tint=C["accent"]), "设置")
+        self.tabs.addTab(self.settings_hub_tab, icon("setting", tint=_tint), "设置")
         self.home_tab.bind_tabs(self.tabs, {
             "parser": self.parser_tab,
             "builder": self.visual_builder_tab,
@@ -3034,13 +3043,15 @@ class MainWindow(QMainWindow):
 
     def refresh_tab_icons(self) -> None:
         """主题切换后刷新 Tab 图标着色."""
+        _tint = C["text_dim"]
         specs = [
-            (0, icon("home", tint=C["accent"])),
-            (1, icon("code", tint=C["accent"])),
-            (2, icon("upload", tint=C["accent"])),
-            (3, icon("builder", tint=C["teal"])),
-            (4, icon("plugin", tint=C["purple"])),
-            (5, icon("setting", tint=C["accent"])),
+            (0, icon("home", tint=_tint)),
+            (1, icon("upload", tint=_tint)),
+            (2, icon("builder", tint=_tint)),
+            (3, icon("code", tint=_tint)),
+            (4, icon("plugin", tint=_tint)),
+            (5, icon("analyzer", tint=_tint)),
+            (6, icon("setting", tint=_tint)),
         ]
         for idx, ic in specs:
             if idx < self.tabs.count():
@@ -3093,6 +3104,11 @@ class MainWindow(QMainWindow):
         if not profile:
             QMessageBox.warning(self, "提示", "请先在控制面板选择项目")
             return
+        ok_role, role_msg = check_roles(profile, "decrypt")
+        if not ok_role:
+            QMessageBox.warning(self, "角色不可用", role_msg)
+            log_signal.append_log.emit("WARNING", role_msg.replace("\n", " | "))
+            return
         plugin_script = get_plugin_script_path(profile)
         if not os.path.isfile(plugin_script):
             QMessageBox.warning(
@@ -3107,13 +3123,53 @@ class MainWindow(QMainWindow):
                 "常见配置：解密端 8080，Burp 8083。",
             )
             return
+        if is_port_in_use(port):
+            msg = port_in_use_message(port, "解密端")
+            QMessageBox.warning(self, "端口占用", msg)
+            log_signal.append_log.emit("ERROR", msg.replace("\n", " | "))
+            return
+        if is_port_in_use(burp_port):
+            # Burp 应在监听；这里只提示，不阻止（可能是正常的 Burp）
+            log_signal.append_log.emit(
+                "INFO",
+                f"检测到 :{burp_port} 已有服务（通常是 Burp）。请确认 Burp 已打开且端口一致。",
+            )
+        else:
+            log_signal.append_log.emit(
+                "WARNING",
+                f"Burp 端口 :{burp_port} 当前无进程监听。解密后转发可能失败，请先启动 Burp。",
+            )
+
+        cert_level, cert_msg = check_cert_before_decrypt()
+        if cert_level == "warn" and cert_msg:
+            log_signal.append_log.emit("WARNING", cert_msg.replace("\n", " | "))
+            reply = QMessageBox.question(
+                self, "HTTPS 证书未就绪",
+                cert_msg,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
         mitmdump = _resolve_mitmdump()
+        if not _mitmdump_available():
+            QMessageBox.warning(
+                self, "未找到 mitmdump",
+                "未找到 mitmdump。\n\n请 pip install mitmproxy，或将 mitmdump.exe 放在程序目录。",
+            )
+            log_signal.append_log.emit("ERROR", "未找到 mitmdump，无法启动解密端")
+            return
+
         auto_install_if_needed(self)
         if hasattr(self.control, "refresh_cert_status"):
             self.control.refresh_cert_status()
         _, args, env_map = build_proxy_launch(
             profile, "decrypt", port, use_main=use_main, burp_port=burp_port,
         )
+        self._tls_warned = False
+        self._match_miss_warned = False
+        self._proxy_fail_tips = set()
         self.decrypt_process = QProcess(self)
         env = QProcessEnvironment.systemEnvironment()
         for k, v in env_map.items():
@@ -3124,8 +3180,17 @@ class MainWindow(QMainWindow):
         self.decrypt_process.setArguments(args)
         self.decrypt_process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         self.decrypt_process.readyReadStandardOutput.connect(lambda: self._on_output(self.decrypt_process, "DECRYPT"))
-        self.decrypt_process.finished.connect(lambda c, s: self._on_decrypt_finished(c, s))
+        self.decrypt_process.finished.connect(lambda c, s: self._on_decrypt_finished(c, s, port))
         self.decrypt_process.start()
+        if not self.decrypt_process.waitForStarted(5000):
+            err = self.decrypt_process.errorString()
+            QMessageBox.warning(
+                self, "解密端启动失败",
+                f"无法启动 mitmdump。\n\n{err}\n\n请确认 mitmdump 已安装且路径正确。",
+            )
+            log_signal.append_log.emit("ERROR", f"解密端启动失败: {err}")
+            self.decrypt_process = None
+            return
         self.control.set_decrypt_running(True)
         self._refresh_home_status()
         mode_label = "main.py 框架" if use_main else "plugin.py 直接"
@@ -3135,6 +3200,8 @@ class MainWindow(QMainWindow):
         else:
             log_signal.append_log.emit("INFO", f"直接加载 plugins/{get_plugin_name(profile) or profile}/plugin.py")
         log_signal.append_log.emit("INFO", f"代理链: 浏览器 → 127.0.0.1:{port} → Burp {burp_port}")
+        for tip in match_startup_tips(profile):
+            log_signal.append_log.emit("INFO", tip)
         plugin_rel = f"plugins/{get_plugin_name(profile) or profile}/plugin.py"
         load_hint = (
             f"加载: main.py (PROFILE={profile})\n"
@@ -3142,26 +3209,34 @@ class MainWindow(QMainWindow):
             if use_main
             else f"插件: {plugin_rel}\n\n"
         )
+        match_line = ""
+        cfg = load_profile(profile)
+        if cfg.get("match"):
+            from core.launch_checks import format_match_summary
+            match_line = f"匹配: {format_match_summary(cfg.get('match'))}\n\n"
         QMessageBox.information(
             self, "解密端已启动",
             f"项目: {profile}\n"
             f"模式: {mode_label}\n"
             f"{load_hint}"
+            f"{match_line}"
             f"1. 浏览器代理 → 127.0.0.1:{port}\n"
             f"2. Burp 监听 → {burp_port}\n"
             f"3. 修改 plugin.py 后需重启解密端\n"
-            f"4. 验证 HTTPS → https://mitm.it",
+            f"4. 验证 HTTPS → https://mitm.it\n"
+            f"5. 若请求不被处理 → 看日志「未匹配」并点左侧「规则」",
         )
-
-    def _stop_decrypt(self):
-        if self.decrypt_process and self.decrypt_process.state()!=QProcess.ProcessState.NotRunning:
-            self.decrypt_process.terminate(); QTimer.singleShot(3000,lambda:self._kill(self.decrypt_process))
 
     def _start_encrypt(self, port, profile=""):
         profile = profile or self.control.profile_combo.currentText()
         use_main = self.control.load_mode_combo.currentData() == "main"
         if not profile:
             QMessageBox.warning(self, "提示", "请先在控制面板选择项目")
+            return
+        ok_role, role_msg = check_roles(profile, "encrypt")
+        if not ok_role:
+            QMessageBox.warning(self, "角色不可用", role_msg)
+            log_signal.append_log.emit("WARNING", role_msg.replace("\n", " | "))
             return
         plugin_script = get_plugin_script_path(profile)
         if not os.path.isfile(plugin_script):
@@ -3170,8 +3245,22 @@ class MainWindow(QMainWindow):
                 f"未找到:\n{plugin_script}\n\n请在「可视化构建器」添加步骤并保存项目。",
             )
             return
+        if is_port_in_use(port):
+            msg = port_in_use_message(port, "加密端")
+            QMessageBox.warning(self, "端口占用", msg)
+            log_signal.append_log.emit("ERROR", msg.replace("\n", " | "))
+            return
         mitmdump = _resolve_mitmdump()
+        if not _mitmdump_available():
+            QMessageBox.warning(
+                self, "未找到 mitmdump",
+                "未找到 mitmdump。\n\n请 pip install mitmproxy，或将 mitmdump.exe 放在程序目录。",
+            )
+            log_signal.append_log.emit("ERROR", "未找到 mitmdump，无法启动加密端")
+            return
         _, args, env_map = build_proxy_launch(profile, "encrypt", port, use_main=use_main)
+        self._match_miss_warned = False
+        self._proxy_fail_tips = set()
         self.encrypt_process = QProcess(self)
         env = QProcessEnvironment.systemEnvironment()
         for k, v in env_map.items():
@@ -3182,16 +3271,34 @@ class MainWindow(QMainWindow):
         self.encrypt_process.setArguments(args)
         self.encrypt_process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         self.encrypt_process.readyReadStandardOutput.connect(lambda: self._on_output(self.encrypt_process, "ENCRYPT"))
-        self.encrypt_process.finished.connect(lambda c, s: self._on_encrypt_finished(c, s))
+        self.encrypt_process.finished.connect(lambda c, s: self._on_encrypt_finished(c, s, port))
         self.encrypt_process.start()
+        if not self.encrypt_process.waitForStarted(5000):
+            err = self.encrypt_process.errorString()
+            QMessageBox.warning(
+                self, "加密端启动失败",
+                f"无法启动 mitmdump。\n\n{err}\n\n请确认 mitmdump 已安装且路径正确。",
+            )
+            log_signal.append_log.emit("ERROR", f"加密端启动失败: {err}")
+            self.encrypt_process = None
+            return
         self.control.set_encrypt_running(True)
         self._refresh_home_status()
         mode_label = "main.py 框架" if use_main else "plugin.py 直接"
         log_signal.append_log.emit("INFO", f"加密端 [{mode_label}]: mitmdump {' '.join(args)} (项目: {profile})")
         if use_main:
             log_signal.append_log.emit("INFO", f"PROFILE={profile} PROXY_ROLE=encrypt")
+        for tip in match_startup_tips(profile):
+            log_signal.append_log.emit("INFO", tip)
+
+    def _stop_decrypt(self):
+        self._decrypt_user_stop = True
+        if self.decrypt_process and self.decrypt_process.state() != QProcess.ProcessState.NotRunning:
+            self.decrypt_process.terminate()
+            QTimer.singleShot(3000, lambda: self._kill(self.decrypt_process))
 
     def _stop_encrypt(self):
+        self._encrypt_user_stop = True
         if self.encrypt_process and self.encrypt_process.state()!=QProcess.ProcessState.NotRunning:
             self.encrypt_process.terminate(); QTimer.singleShot(3000,lambda:self._kill(self.encrypt_process))
 
@@ -3210,6 +3317,19 @@ class MainWindow(QMainWindow):
     def _clean_proxy_line(self, line):
         return self._mitm_line_prefix.sub("", line)
 
+    def _emit_proxy_tip(self, tip: str, *, level: str = "WARNING", once_key: str | None = None) -> None:
+        if not tip:
+            return
+        key = once_key or tip
+        tips = getattr(self, "_proxy_fail_tips", None)
+        if tips is None:
+            self._proxy_fail_tips = set()
+            tips = self._proxy_fail_tips
+        if key in tips:
+            return
+        tips.add(key)
+        log_signal.append_log.emit(level, tip.replace("\n", " | "))
+
     def _process_output_line(self, line, tag):
         line = self._clean_proxy_line(line)
         if HTTP_LOG_BEGIN in line:
@@ -3227,23 +3347,51 @@ class MainWindow(QMainWindow):
             self._http_log_buffer.append("" if line.strip() == HTTP_LOG_BLANK else line)
             return
         if line.strip():
-            if (
-                not self._tls_warned
-                and tag == "DECRYPT"
-                and "TLS handshake failed" in line
-            ):
-                self._tls_warned = True
-                log_signal.append_log.emit(
-                    "WARNING",
-                    "HTTPS 证书未信任 → 顶部「设置」选项卡中安装证书后重启浏览器",
-                )
+            tip = diagnose_proxy_line(line)
+            if tip:
+                if "证书" in tip or "TLS" in line or "tls handshake" in line.lower():
+                    if not getattr(self, "_tls_warned", False):
+                        self._tls_warned = True
+                        self._emit_proxy_tip(tip, once_key="tls")
+                elif "未匹配" in tip or "未匹配" in line or "跳过(未匹配" in line:
+                    if not getattr(self, "_match_miss_warned", False):
+                        self._match_miss_warned = True
+                        self._emit_proxy_tip(tip, once_key="match")
+                elif "端口" in tip:
+                    self._emit_proxy_tip(tip, level="ERROR", once_key="port")
+                else:
+                    self._emit_proxy_tip(tip, once_key=tip[:40])
             log_signal.append_log.emit("INFO", f"[{tag}] {line.strip()}")
 
-    def _on_decrypt_finished(self, c,s): self.control.set_decrypt_running(False); self.decrypt_process=None; self._refresh_home_status(); log_signal.append_log.emit("INFO",f"解密端已停止")
+    def _on_decrypt_finished(self, c, s, port: int = 8080):
+        user_stop = getattr(self, "_decrypt_user_stop", False)
+        self._decrypt_user_stop = False
+        self.control.set_decrypt_running(False)
+        self.decrypt_process = None
+        self._refresh_home_status()
+        hint = exit_code_hint(c, "解密端", port)
+        if user_stop or c == 0:
+            log_signal.append_log.emit("INFO", "解密端已停止")
+            return
+        log_signal.append_log.emit("ERROR", hint.replace("\n", " | "))
+        QMessageBox.warning(self, "解密端异常退出", hint)
 
-    def _on_encrypt_finished(self, c,s): self.control.set_encrypt_running(False); self.encrypt_process=None; self._refresh_home_status(); log_signal.append_log.emit("INFO",f"加密端已停止")
+    def _on_encrypt_finished(self, c, s, port: int = 8081):
+        user_stop = getattr(self, "_encrypt_user_stop", False)
+        self._encrypt_user_stop = False
+        self.control.set_encrypt_running(False)
+        self.encrypt_process = None
+        self._refresh_home_status()
+        hint = exit_code_hint(c, "加密端", port)
+        if user_stop or c == 0:
+            log_signal.append_log.emit("INFO", "加密端已停止")
+            return
+        log_signal.append_log.emit("ERROR", hint.replace("\n", " | "))
+        QMessageBox.warning(self, "加密端异常退出", hint)
 
     def closeEvent(self, e):
+        self._decrypt_user_stop = True
+        self._encrypt_user_stop = True
         name = self.control.profile_combo.currentText()
         if name:
             try:

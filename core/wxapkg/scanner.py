@@ -112,16 +112,31 @@ def collect_crypto_scripts(
 
 def scripts_as_dict(
     hits: list[ScriptHit],
-    max_chars: int = 28_000,
-    max_per_file: int = 4_000,
+    max_chars: int = 100_000,
+    max_per_file: int = 28_000,
+    max_lib_file: int = 2_000,
 ) -> dict[str, str]:
-    """转为 AILab._scripts：多文件、单文件限长，避免一个噪声文件占满额度."""
+    """转为 AILab._scripts：业务文件优先、大额度；库文件（crypto-js/NIM）仅留短桩。"""
+    _LIB = re.compile(
+        r"(crypto-js\.js$|nim_web_|miniprogram_npm|/libs/|/vendor/|node_modules)",
+        re.IGNORECASE,
+    )
+
+    def is_lib(rel: str) -> bool:
+        return bool(_LIB.search(rel.replace("\\", "/")))
+
+    business = [h for h in hits if not is_lib(h.relpath)]
+    libs = [h for h in hits if is_lib(h.relpath)]
+    ordered = business + libs
+
     out: dict[str, str] = {}
     budget = max_chars
-    for h in hits:
+    for h in ordered:
         if budget <= 200:
             break
-        take = min(h.size, max_per_file, budget)
+        lib = is_lib(h.relpath)
+        cap = max_lib_file if lib else max_per_file
+        take = min(h.size, cap, budget)
         try:
             with open(h.path, "r", encoding="utf-8", errors="ignore") as f:
                 text = f.read(take)
@@ -129,6 +144,13 @@ def scripts_as_dict(
             continue
         if not text.strip():
             continue
+        if lib and len(text) >= take:
+            text = (
+                text
+                + "\n\n/* [library stub] 已截断；加密密钥/业务调用请查非 libs 的业务 JS */\n"
+            )
+        elif not lib and h.size > take:
+            text = text + f"\n\n/* …truncated, file_size={h.size}, loaded={take} */\n"
         label = f"miniprogram://{h.relpath}"
         out[label] = text
         budget -= len(text)

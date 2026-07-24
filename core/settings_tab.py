@@ -1,4 +1,4 @@
-"""设置中心 Tab — 通用设置 + 加密分析 / 加解密测试 / 日志."""
+"""设置中心 Tab — 通用设置 + 加解密测试 / 日志."""
 
 from __future__ import annotations
 
@@ -133,17 +133,15 @@ class GeneralSettingsPage(QWidget):
 
 
 class SettingsHubTab(QWidget):
-    """主界面「设置」— 内含通用 / 加密分析 / 加解密测试 / 日志."""
+    """主界面「设置」— 内含通用 / 加解密测试 / 日志."""
 
     PAGE_GENERAL = 0
-    PAGE_ANALYZER = 1
-    PAGE_CRYPTO = 2
-    PAGE_LOG = 3
+    PAGE_CRYPTO = 1
+    PAGE_LOG = 2
 
-    def __init__(self, control, analyzer_tab, crypto_tab, log_tab, parent=None):
+    def __init__(self, control, crypto_tab, log_tab, parent=None):
         super().__init__(parent)
         self.control = control
-        self.analyzer_tab = analyzer_tab
         self.crypto_tab = crypto_tab
         self.log_tab = log_tab
 
@@ -154,7 +152,6 @@ class SettingsHubTab(QWidget):
         self.inner_tabs = QTabWidget()
         self.general_page = GeneralSettingsPage(control)
         self.inner_tabs.addTab(self.general_page, "通用")
-        self.inner_tabs.addTab(analyzer_tab, "加密分析")
         self.inner_tabs.addTab(crypto_tab, "加解密测试")
         self.inner_tabs.addTab(log_tab, "日志")
         layout.addWidget(self.inner_tabs)

@@ -19,6 +19,10 @@ pycryptodome>=3.20
 # ── HTTP 客户端 (插件转发 Burp、AI API 调用等) ───────
 requests>=2.31
 
+# ── AI Agent (vendor/agent_core，Anthropic Messages + tools) ──
+httpx>=0.27
+pydantic>=2.0
+
 # ── 代理核心 (mitmdump，含 HTTPS 解密) ───────────────
 mitmproxy>=10.0,<12
 

@@ -8,7 +8,11 @@ Profile 匹配 → 自动加载对应插件.
 
 import sys, os, logging
 
-sys.path.insert(0, os.path.dirname(__file__))
+_ROOT = os.path.dirname(__file__)
+sys.path.insert(0, _ROOT)
+_VENDOR = os.path.join(_ROOT, "vendor")
+if os.path.isdir(_VENDOR) and _VENDOR not in sys.path:
+    sys.path.insert(0, _VENDOR)
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 from core.mitm_engine import MitmEngine

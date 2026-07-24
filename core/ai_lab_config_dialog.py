@@ -52,7 +52,11 @@ class AILabConfigDialog(QDialog):
         self.test_btn.clicked.connect(self._test_config)
         style_sidebar_aux_button(self.test_btn)
         ai_form.addRow("", self.test_btn)
-        hint = QLabel("配置保存至 config/ai.yaml（已在 .gitignore 中）")
+        hint = QLabel(
+            "配置保存至 config/ai.yaml（已在 .gitignore 中）。"
+            "Agent 对话使用 Anthropic Messages + tools"
+            "（DeepSeek 会自动映射到 /anthropic）。"
+        )
         style_muted_label(hint)
         hint.setWordWrap(True)
         ai_form.addRow(hint)

@@ -10,6 +10,7 @@ import sys
 from PyQt6.QtCore import QObject, QProcess, QProcessEnvironment, pyqtSignal
 
 from core.capture_addon import PREFIX
+from core.capture_filter import parse_filter_patterns, should_capture_url
 from core.paths import get_app_root, get_bundle_root
 from core.system_proxy import ProxySnapshot, is_supported, restore_proxy, set_proxy
 
@@ -56,6 +57,8 @@ class MiniprogramCaptureWorker(QObject):
         self._key_to_index: dict[str, int] = {}
         self._flow_count = 0
         self._buf = ""
+        self._host_filter = ""
+        self._block_noise = True
 
     @property
     def running(self) -> bool:
@@ -68,12 +71,27 @@ class MiniprogramCaptureWorker(QObject):
     def port(self) -> int:
         return self._port
 
-    def start(self, port: int = DEFAULT_PORT, *, use_system_proxy: bool = True) -> None:
+    def set_capture_filter(self, host_filter: str = "", *, block_noise: bool | None = None) -> None:
+        """运行中也可改过滤（进程内二次过滤；重启后 addon 侧一并生效）."""
+        self._host_filter = (host_filter or "").strip()
+        if block_noise is not None:
+            self._block_noise = bool(block_noise)
+
+    def start(
+        self,
+        port: int = DEFAULT_PORT,
+        *,
+        use_system_proxy: bool = True,
+        host_filter: str = "",
+        block_noise: bool = True,
+    ) -> None:
         if self.running:
             self.failed.emit("抓包代理已在运行")
             return
         self._port = int(port)
         self._use_system_proxy = bool(use_system_proxy)
+        self._host_filter = (host_filter or "").strip()
+        self._block_noise = bool(block_noise)
         self._key_to_index.clear()
         self._flow_count = 0
         self._buf = ""
@@ -93,6 +111,8 @@ class MiniprogramCaptureWorker(QObject):
         self._proc = QProcess(self)
         env = QProcessEnvironment.systemEnvironment()
         env.insert("PYTHONPATH", get_app_root())
+        env.insert("CB_CAPTURE_HOST_FILTER", self._host_filter)
+        env.insert("CB_CAPTURE_BLOCK_NOISE", "1" if self._block_noise else "0")
         self._proc.setProcessEnvironment(env)
         self._proc.setProgram(mitmdump)
         self._proc.setArguments(args)
@@ -102,6 +122,12 @@ class MiniprogramCaptureWorker(QObject):
         self._proc.errorOccurred.connect(self._on_error)
 
         self.log.emit(f"启动抓包: {mitmdump} {' '.join(args)}")
+        if self._host_filter:
+            self.log.emit(f"域名过滤: {self._host_filter}")
+        else:
+            self.log.emit("域名过滤: （未设置，记录全部匹配流量）")
+        if self._block_noise:
+            self.log.emit("已开启：屏蔽常见系统噪音（更新/微软/谷歌等）")
         self._proc.start()
         if not self._proc.waitForStarted(8000):
             err = self._proc.errorString() if self._proc else "启动超时"
@@ -160,6 +186,13 @@ class MiniprogramCaptureWorker(QObject):
             elif "error" in line.lower() or "traceback" in line.lower():
                 self.log.emit(line[:500])
 
+    def _passes_filter(self, data: dict) -> bool:
+        return should_capture_url(
+            str(data.get("url") or ""),
+            allow_patterns=parse_filter_patterns(self._host_filter),
+            block_noise=self._block_noise,
+        )
+
     def _handle_flow_line(self, payload: str) -> None:
         try:
             data = json.loads(payload)
@@ -167,6 +200,8 @@ class MiniprogramCaptureWorker(QObject):
             return
         key = str(data.get("key", ""))
         phase = data.get("phase")
+        if not self._passes_filter(data):
+            return
         if phase == "request" or key not in self._key_to_index:
             idx = self._flow_count
             self._flow_count += 1
