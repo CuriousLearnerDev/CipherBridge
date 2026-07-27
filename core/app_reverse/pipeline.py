@@ -74,10 +74,9 @@ def _decode_with_apktool(apk_path: str, out_dir: str, log) -> None:
     java = resolve_java()
     jar = resolve_apktool_jar()
     if not java or not jar:
-        raise ApkReverseError(
-            "未找到 Java 或 apktool。请安装 JDK，或将统领 storage 下的 "
-            "jadx-gui/jre 与 apktool 放到可探测路径（TONGLING_STORAGE）。"
-        )
+        from core.app_reverse.tools import tools_setup_message
+
+        raise ApkReverseError(tools_setup_message())
     if os.path.isdir(out_dir):
         shutil.rmtree(out_dir, ignore_errors=True)
     os.makedirs(os.path.dirname(out_dir) or ".", exist_ok=True)

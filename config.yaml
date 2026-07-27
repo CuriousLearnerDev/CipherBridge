@@ -3,7 +3,7 @@
 # ============================================================
 #
 # 启动方式 (命令行):
-#   解密端: PROXY_ROLE=decrypt PROFILE=myapp mitmdump -s main.py -p 8080
+#   解密端: PROXY_ROLE=decrypt PROFILE=myapp mitmdump -s main.py -p 8083
 #   加密端: PROXY_ROLE=encrypt PROFILE=myapp mitmdump -s main.py -p 8081
 #
 # 推荐通过 GUI 可视化构建器生成 plugins/{name}/plugin.py 后直接使用 plugin 模式.
@@ -12,7 +12,7 @@
 mode: decrypt
 
 forward:
-  decrypt_to: "http://127.0.0.1:8083"
+  decrypt_to: "http://127.0.0.1:8080"
   encrypt_to: null
   timeout: 30
 

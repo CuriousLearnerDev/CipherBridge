@@ -12,11 +12,11 @@ ROOT = get_app_root()
 SETTINGS_PATH = os.path.join(ROOT, "config", "settings.yaml")
 
 _DEFAULTS = {
-    "app": {"name": "密桥", "name_en": "CipherBridge", "version": "3.1"},
+    "app": {"name": "密桥", "name_en": "CipherBridge", "version": "3.5"},
     "proxy": {
-        "default_decrypt_port": 8080,
+        "default_decrypt_port": 8083,
         "default_encrypt_port": 8081,
-        "default_burp_address": "http://127.0.0.1:8083",
+        "default_burp_address": "http://127.0.0.1:8080",
         "timeout": 30,
     },
     "gui": {"theme": "dark", "font_size": 11, "max_log_lines": 5000},

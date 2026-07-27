@@ -19,12 +19,12 @@ DEFAULT = {
     "use_http_proxy": False,
     # Agent（Anthropic Messages + tools）；空则从 base_url 推导
     "agent_base_url": "",
-    "agent_max_steps": 15,
+    "agent_max_steps": 50,
     "browser": {
         "hook_enabled": True,
         "headless": False,
         "use_mitm_proxy": False,
-        "mitm_port": 8080,
+        "mitm_port": 8083,
         "last_url": "",
     },
 }

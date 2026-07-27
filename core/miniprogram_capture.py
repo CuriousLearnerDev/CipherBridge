@@ -137,12 +137,30 @@ class MiniprogramCaptureWorker(QObject):
 
         if self._use_system_proxy and is_supported():
             try:
-                self._proxy_snapshot = set_proxy("127.0.0.1", self._port)
+                extra_bypass: list[str] = []
+                try:
+                    from core.ai_config import load_ai_config
+                    from urllib.parse import urlparse
+
+                    cfg = load_ai_config()
+                    for key in ("base_url", "agent_base_url"):
+                        raw = str(cfg.get(key) or "").strip()
+                        if not raw:
+                            continue
+                        host = urlparse(raw if "://" in raw else f"https://{raw}").hostname
+                        if host:
+                            extra_bypass.append(host)
+                except Exception:
+                    pass
+                self._proxy_snapshot = set_proxy(
+                    "127.0.0.1", self._port, extra_bypass=extra_bypass or None,
+                )
                 self.log.emit(
                     f"已设置系统代理 127.0.0.1:{self._port} "
                     f"(原设置: enable={self._proxy_snapshot.enabled} "
                     f"server={self._proxy_snapshot.server or '无'})"
                 )
+                self.log.emit("已将 AI API 等域名加入直连名单，减少抓包时接口失败")
             except Exception as e:
                 self.log.emit(f"系统代理设置失败（请手动配置）: {e}")
                 self._proxy_snapshot = None

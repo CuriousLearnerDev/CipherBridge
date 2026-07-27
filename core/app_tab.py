@@ -17,7 +17,12 @@ from core.app_reverse import (
     ApkReverseError,
     decode_apk,
     default_apk_workspace,
+    ensure_tools_dirs,
+    missing_required_tools,
+    resolve_apktool_jar,
     resolve_jadx_gui,
+    resolve_java,
+    tools_setup_message,
     tools_status,
 )
 from core.icon_loader import set_btn_icon
@@ -99,6 +104,11 @@ class AppReversePanel(QWidget):
         self.open_out_btn.clicked.connect(self._open_out)
         style_sidebar_aux_button(self.open_out_btn)
         row2.addWidget(self.open_out_btn)
+        self.setup_btn = QPushButton("配置工具")
+        self.setup_btn.setToolTip("查看缺失工具说明，并打开 tools 目录自行放置")
+        self.setup_btn.clicked.connect(self._show_tools_setup)
+        style_sidebar_aux_button(self.setup_btn)
+        row2.addWidget(self.setup_btn)
         row2.addStretch()
         layout.addLayout(row2)
 
@@ -139,14 +149,49 @@ class AppReversePanel(QWidget):
         layout.addWidget(tip)
 
     def _refresh_tools_hint(self):
+        ensure_tools_dirs()
         st = tools_status()
         parts = [
             "Java✓" if st["java"] else "Java✗",
             "apktool✓" if st["apktool"] else "apktool✗",
             "jadx✓" if st["jadx_gui"] else "jadx✗",
         ]
-        self.tools_label.setText("工具: " + " · ".join(parts))
+        miss = missing_required_tools()
+        if miss:
+            self.tools_label.setText(
+                "工具: " + " · ".join(parts)
+                + f" — 缺少 {', '.join(miss)}，请点「配置工具」"
+            )
+        else:
+            self.tools_label.setText("工具: " + " · ".join(parts) + " — 已就绪")
         self.jadx_btn.setEnabled(bool(st["jadx_gui"]))
+
+    def _show_tools_setup(self):
+        ensure_tools_dirs()
+        # 清缓存，用户刚放完 jar 后点配置/再反编译能立刻生效
+        resolve_java.cache_clear()
+        resolve_jadx_gui.cache_clear()
+        resolve_apktool_jar.cache_clear()
+        self._refresh_tools_hint()
+        msg = tools_setup_message()
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setWindowTitle("配置 App 逆向工具")
+        box.setText(msg)
+        open_btn = box.addButton("打开 tools 目录", QMessageBox.ButtonRole.ActionRole)
+        box.addButton("知道了", QMessageBox.ButtonRole.AcceptRole)
+        box.exec()
+        if box.clickedButton() == open_btn:
+            self._open_tools_dir()
+
+    def _open_tools_dir(self):
+        path = ensure_tools_dirs()
+        if sys.platform == "win32":
+            os.startfile(path)  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", path])
+        else:
+            subprocess.Popen(["xdg-open", path])
 
     def _log(self, text: str):
         self.log_view.appendPlainText(text)
@@ -166,6 +211,15 @@ class AppReversePanel(QWidget):
     def _start_decode(self):
         if not self._apk_path or not os.path.isfile(self._apk_path):
             QMessageBox.warning(self, "提示", "请先选择 APK")
+            return
+        # 重新探测，避免用户刚放入 jar 仍读到旧缓存
+        resolve_java.cache_clear()
+        resolve_apktool_jar.cache_clear()
+        resolve_jadx_gui.cache_clear()
+        self._refresh_tools_hint()
+        miss = missing_required_tools()
+        if miss:
+            self._show_tools_setup()
             return
         if self._worker and self._worker.isRunning():
             self._log("正在反编译，请稍候…")
@@ -213,7 +267,20 @@ class AppReversePanel(QWidget):
         self.pick_btn.setEnabled(True)
         self.status.setText("反编译失败")
         self._log(f"错误: {err}")
-        QMessageBox.critical(self, "App 逆向失败", err)
+        low = (err or "").lower()
+        if "java" in low or "apktool" in low or "未找到" in err:
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle("App 逆向失败")
+            box.setText(err)
+            box.setInformativeText("需要自行配置反编译工具（大文件不随仓库分发）。")
+            setup_btn = box.addButton("配置工具", QMessageBox.ButtonRole.ActionRole)
+            box.addButton("关闭", QMessageBox.ButtonRole.RejectRole)
+            box.exec()
+            if box.clickedButton() == setup_btn:
+                self._show_tools_setup()
+        else:
+            QMessageBox.critical(self, "App 逆向失败", err)
 
     def _preview_hit(self, item: QListWidgetItem):
         path = item.data(Qt.ItemDataRole.UserRole)
@@ -238,9 +305,14 @@ class AppReversePanel(QWidget):
             subprocess.Popen(["xdg-open", path])
 
     def _open_jadx(self):
+        resolve_jadx_gui.cache_clear()
         jadx = resolve_jadx_gui()
         if not jadx:
-            QMessageBox.information(self, "提示", "未找到 jadx-gui")
+            QMessageBox.information(
+                self, "未找到 jadx-gui",
+                tools_setup_message(missing=["jadx-gui（可选）"]),
+            )
+            self._show_tools_setup()
             return
         try:
             if self._apk_path and os.path.isfile(self._apk_path):

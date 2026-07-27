@@ -558,6 +558,43 @@ def _load_profile_match(profile_name: str) -> dict:
         return {}
 
 
+def blank_plugin_template(name: str = "plugin") -> str:
+    """新建项目时的空白 mitmdump 插件（合法 HTTPFlow 签名，可直接启动）."""
+    return (
+        f'"""插件: {name} — 由 {APP_TITLE} 生成.\n'
+        "在「请求解析器」粘贴报文，左键字段添加加解密步骤后保存，即可覆盖本文件。\n"
+        '"""\n'
+        "import sys, os\n"
+        'sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))\n'
+        "from mitmproxy import http\n"
+        "\n"
+        "\n"
+        "def request(flow: http.HTTPFlow) -> None:\n"
+        "    # 添加步骤并保存项目后，此处会生成解密/加密逻辑\n"
+        "    return\n"
+        "\n"
+        "\n"
+        "def response(flow: http.HTTPFlow) -> None:\n"
+        "    return\n"
+    )
+
+
+def default_profile_match_yaml() -> str:
+    """新建项目默认匹配：放宽 path/methods，避免启动后「完全没流量」."""
+    return (
+        "match:\n"
+        "  host:\n"
+        "    - '*'\n"
+        "  path:\n"
+        "    - '*'\n"
+        "  methods:\n"
+        "    - POST\n"
+        "    - PUT\n"
+        "    - PATCH\n"
+        "    - GET\n"
+    )
+
+
 def codegen_for_pipeline(steps: list, body_format: str = "json", profile_name: str = "") -> str:
     """按项目角色生成含 requests 转发的完整插件代码."""
     return generate_code_from_steps(
@@ -926,7 +963,7 @@ def generate_code_from_steps(
     code += 'sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))\n'
     code += "from mitmproxy import http\n"
     if role == "decrypt":
-        code += '\nBURP_PORT = os.environ.get("BURP_PORT", "8083")\n'
+        code += '\nBURP_PORT = os.environ.get("BURP_PORT", "8080")\n'
         code += "BURP_PROXY = (\"127.0.0.1\", int(BURP_PORT))\n"
     for imp in sorted(imports):
         code += imp + "\n"
@@ -984,7 +1021,8 @@ def generate_code_from_steps(
         code += "\n"
     else:
         code += "def request(flow: http.HTTPFlow) -> None:\n"
-        code += "    pass\n\n"
+        code += "    # 暂无请求步骤：在解析器/构建器添加后保存即可\n"
+        code += "    return\n\n"
 
     if response_lines:
         code += "def response(flow: http.HTTPFlow) -> None:\n"

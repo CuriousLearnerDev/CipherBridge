@@ -30,7 +30,7 @@ from core.ai_project_writer import (
 )
 from core.browser_lab import BrowserLabWorker
 from core.miniprogram_tab import MiniprogramPanel
-# from core.app_tab import AppReversePanel  # App 页暂隐藏
+from core.app_tab import AppReversePanel
 from core.project_name import normalize_project_name
 from core.icon_loader import set_btn_icon
 from core.theme import (
@@ -118,12 +118,11 @@ class AILabTab(QWidget):
         self.miniprogram_panel.flow_selected.connect(self._show_external_flow)
         self.miniprogram_panel.capture_log.connect(self._log)
         self.source_tabs.addTab(self.miniprogram_panel, "小程序")
-        # App 反编译页暂不展示（需要时取消注释）
-        # self.app_panel = AppReversePanel(compact=True)
-        # self.app_panel.scripts_ready.connect(self.load_app_scripts)
-        # self.app_panel.request_ai_analyze.connect(self._run_recognize)
-        # self.app_panel.capture_log.connect(self._log)
-        # self.source_tabs.addTab(self.app_panel, "App")
+        self.app_panel = AppReversePanel(compact=True)
+        self.app_panel.scripts_ready.connect(self.load_app_scripts)
+        self.app_panel.request_ai_analyze.connect(self._run_recognize)
+        self.app_panel.capture_log.connect(self._log)
+        self.source_tabs.addTab(self.app_panel, "App")
         ll.addWidget(self.source_tabs, 1)
         splitter.addWidget(left)
 
@@ -345,7 +344,7 @@ class AILabTab(QWidget):
         if mode != "chat" and not self._has_capture_data():
             QMessageBox.warning(
                 self, "提示",
-                "请先在左侧采集：网页 / 小程序。",
+                "请先在左侧采集：网页 / 小程序 / App。",
             )
             return
         self._pause_capture_for_ai()
@@ -417,13 +416,43 @@ class AILabTab(QWidget):
                 self._generate_plugin(silent=False, code_role=gen_role)
             else:
                 self._log("Agent 完成但未解析到有效 steps，已跳过生成（可查看 Agent 原文）")
-                QMessageBox.warning(
-                    self, "未得到步骤",
-                    "Agent 已结束，但回复里没有可用的 steps JSON。\n"
-                    "可在 Agent 页追问，或检查 Hook/流量后重试「生成解密/加密」。",
+                dropped = (result or {}).get("_dropped") or []
+                detail = ""
+                if dropped:
+                    detail = "\n\n被过滤的步骤:\n- " + "\n- ".join(dropped[:8])
+                elif result and result.get("summary"):
+                    detail = f"\n\n分析摘要: {result.get('summary')}"
+                else:
+                    preview = (text or "").strip().replace("\n", " ")
+                    if len(preview) > 240:
+                        preview = preview[:240] + "…"
+                    if preview:
+                        detail = f"\n\nAgent 原文摘要: {preview}"
+                box = QMessageBox(self)
+                box.setIcon(QMessageBox.Icon.Warning)
+                box.setWindowTitle("未得到步骤")
+                box.setText(
+                    "Agent 已结束，但没有可用的 steps 可写入项目。"
+                    + detail
                 )
+                box.setInformativeText(
+                    "可点「再试一次」重新生成；或到 Agent 页查看原文后追问。"
+                    "若原文有结论但无 JSON，再试一次会强制补一轮 steps。"
+                )
+                retry_btn = box.addButton("再试一次", QMessageBox.ButtonRole.AcceptRole)
+                box.addButton("知道了", QMessageBox.ButtonRole.RejectRole)
+                box.exec()
+                if box.clickedButton() == retry_btn:
+                    self._run_analyze_and_generate(gen_role)
         elif result and result.get("steps"):
             self._log(f"识别到 {len(result['steps'])} 个步骤，可再点「生成解密/加密」落地")
+            dropped = result.get("_dropped") or []
+            if dropped:
+                self._log(f"另有 {len(dropped)} 个步骤因类型/密钥无效被过滤")
+        elif result and result.get("_dropped"):
+            self._log(
+                "识别到候选步骤但均被过滤（多为 key=unknown），可在 Agent 追问补全密钥"
+            )
 
     def _on_agent_fail(self, err: str):
         self.agent_view.appendPlainText(f"\n❌ {err}\n")
@@ -775,7 +804,7 @@ class AILabTab(QWidget):
         tip = (
             "已有采集数据"
             if ready
-            else "请先在左侧「网页 / 小程序」采集或反编译"
+            else "请先在左侧「网页 / 小程序 / App」采集或反编译"
         )
         self.recognize_btn.setToolTip(f"识别加解密线索（不写文件）— {tip}")
         self.gen_decrypt_btn.setToolTip(f"写出解密端 plugin.py — {tip}")

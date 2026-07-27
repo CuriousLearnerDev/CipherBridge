@@ -6,8 +6,9 @@ Tab互通:
   在构建器编辑步骤 → 解析器树刷新标记
 
 端口职责:
-  8080 解密端: 只处理 request(ctx) — 解密请求体
+  8083 解密端: 只处理 request(ctx) — 解密请求体
   8081 加密端: 只处理 request(ctx) — 加密+签名
+  Burp 默认 8080
 """
 
 import os, sys, json, yaml, logging, secrets, urllib.parse, html
@@ -36,7 +37,14 @@ _VENDOR = os.path.join(_APP_ROOT, "vendor")
 if os.path.isdir(_VENDOR) and _VENDOR not in sys.path:
     sys.path.insert(0, _VENDOR)
 from algorithms import create_algorithm
-from codegen import generate_code_from_steps, parse_code_to_steps, codegen_for_pipeline, get_codegen_role
+from codegen import (
+    generate_code_from_steps,
+    parse_code_to_steps,
+    codegen_for_pipeline,
+    get_codegen_role,
+    blank_plugin_template,
+    default_profile_match_yaml,
+)
 from core.http_message import HTTP_LOG_BEGIN, HTTP_LOG_END, HTTP_LOG_BLANK
 from core.extension_registry import (
     EXTENSIONS_DIR, reload_extensions, list_extension_files,
@@ -124,7 +132,7 @@ def build_proxy_launch(
     port: int,
     *,
     use_main: bool,
-    burp_port: int = 8083,
+    burp_port: int = 8080,
 ) -> tuple[str, list[str], dict[str, str]]:
     """组装 mitmdump 入口脚本、参数与环境变量."""
     env: dict[str, str] = {"PYTHONPATH": PROJECT_ROOT}
@@ -335,17 +343,18 @@ class ControlPanel(QFrame):
         style_status_label(self.decrypt_status, running=False)
         d_layout.addWidget(self.decrypt_status)
         d_row = QHBoxLayout()
-        d_row.addWidget(QLabel("端口"))
+        d_row.addWidget(QLabel("监听端口"))
         self.decrypt_port = QSpinBox()
         self.decrypt_port.setRange(1024, 65535)
-        self.decrypt_port.setValue(8080)
+        self.decrypt_port.setValue(8083)
+        self.decrypt_port.setToolTip("浏览器/客户端代理指向此端口（解密端）")
         d_row.addWidget(self.decrypt_port)
         d_layout.addLayout(d_row)
         d_fwd = QHBoxLayout()
-        d_fwd.addWidget(QLabel("→ Burp"))
+        d_fwd.addWidget(QLabel("Burp"))
         self.burp_port = QSpinBox()
         self.burp_port.setRange(1024, 65535)
-        self.burp_port.setValue(8083)
+        self.burp_port.setValue(8080)
         self.burp_port.setToolTip("解密后的明文转发到此 Burp 端口")
         d_fwd.addWidget(self.burp_port)
         d_layout.addLayout(d_fwd)
@@ -404,16 +413,35 @@ class ControlPanel(QFrame):
         self.decrypt_start_btn.setToolTip("需先选择项目；浏览器代理指向解密端端口")
         self.encrypt_start_btn.setToolTip("需先选择项目；Burp 上游代理指向加密端端口")
 
+        # ---- 代理浏览器（类似 Burp 内置浏览器，打开即显示拓扑起始页）----
+        browser_grp = QGroupBox("代理浏览器")
+        b_layout = QVBoxLayout(browser_grp)
+        b_layout.setContentsMargins(0, 8, 0, 4)
+        b_layout.setSpacing(6)
+        self.browser_open_btn = QPushButton("打开代理浏览器")
+        self.browser_open_btn.setToolTip("打开 Chromium，代理指向解密端监听端口；默认显示拓扑起始页")
+        self.browser_open_btn.setMinimumHeight(30)
+        b_layout.addWidget(self.browser_open_btn)
+        self.browser_hint = QLabel("经解密端代理 · 关窗即退出")
+        style_muted_label(self.browser_hint)
+        self.browser_hint.setWordWrap(True)
+        b_layout.addWidget(self.browser_hint)
+        layout.addWidget(browser_grp)
+        self.browser_open_btn.clicked.connect(self._launch_proxy_browser)
+        self._proxy_browser = None
+
         style_button(new_btn, "primary")
         set_btn_icon(new_btn, "add")
         style_button(self.decrypt_start_btn, "primary")
         style_button(self.decrypt_stop_btn, "danger")
         style_button(self.encrypt_start_btn, "primary")
         style_button(self.encrypt_stop_btn, "danger")
+        style_button(self.browser_open_btn, "primary")
         set_btn_icon(self.decrypt_start_btn, "play")
         set_btn_icon(self.decrypt_stop_btn, "stop")
         set_btn_icon(self.encrypt_start_btn, "play")
         set_btn_icon(self.encrypt_stop_btn, "stop")
+        set_btn_icon(self.browser_open_btn, "home")
 
         self._update_project_ui_state()
         layout.addStretch()
@@ -432,6 +460,7 @@ class ControlPanel(QFrame):
 
         self.decrypt_start_btn.setEnabled(has_project and not dec_running)
         self.encrypt_start_btn.setEnabled(has_project and not enc_running)
+        self._refresh_browser_hint()
 
         win = self.window()
         if hasattr(win, "home_tab"):
@@ -570,6 +599,7 @@ class ControlPanel(QFrame):
             self.decrypt_start_btn.setEnabled(True); self.decrypt_stop_btn.setEnabled(False)
             self.decrypt_port.setEnabled(True)
         self._update_project_ui_state()
+        self._refresh_browser_hint()
 
     def set_encrypt_running(self, r: bool):
         if r:
@@ -583,6 +613,74 @@ class ControlPanel(QFrame):
             self.encrypt_start_btn.setEnabled(True); self.encrypt_stop_btn.setEnabled(False)
             self.encrypt_port.setEnabled(True)
         self._update_project_ui_state()
+
+    def _decrypt_is_running(self) -> bool:
+        return "运行中" in (self.decrypt_status.text() or "")
+
+    def _proxy_browser_home_url(self) -> str:
+        """默认起始页：拓扑图 HTML（类似 Burp 打开内置浏览器）。"""
+        from pathlib import Path
+        from core.paths import get_app_root
+
+        html = Path(get_app_root()) / "img" / "proxy_browser_home.html"
+        if html.is_file():
+            return html.resolve().as_uri()
+        return "about:blank"
+
+    def _refresh_browser_hint(self) -> None:
+        if not hasattr(self, "browser_hint"):
+            return
+        port = self.decrypt_port.value()
+        running = bool(self._proxy_browser and self._proxy_browser.isRunning())
+        if running:
+            self.browser_hint.setText(f"运行中 → :{port}（关窗退出）")
+            self.browser_open_btn.setEnabled(False)
+        elif self._decrypt_is_running():
+            self.browser_hint.setText(f"代理 :{port} · 关窗即退出")
+            self.browser_open_btn.setEnabled(True)
+        else:
+            self.browser_hint.setText(f"将代理到 :{port} — 建议先启动解密端")
+            self.browser_open_btn.setEnabled(True)
+
+    def _launch_proxy_browser(self) -> None:
+        if self._proxy_browser and self._proxy_browser.isRunning():
+            QMessageBox.information(self, "提示", "代理浏览器已在运行")
+            return
+        if not self._decrypt_is_running():
+            reply = QMessageBox.question(
+                self,
+                "解密端未启动",
+                "建议先启动解密端，浏览器才会走加解密代理。\n\n仍要打开吗？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+        port = self.decrypt_port.value()
+        url = self._proxy_browser_home_url()
+        from core.proxy_browser import ProxyBrowserWorker
+
+        self._proxy_browser = ProxyBrowserWorker(port, url, parent=self)
+        self._proxy_browser.log.connect(
+            lambda m: log_signal.append_log.emit("INFO", f"[浏览器] {m}")
+        )
+        self._proxy_browser.failed.connect(self._on_proxy_browser_failed)
+        self._proxy_browser.stopped.connect(self._on_proxy_browser_stopped)
+        self._proxy_browser.start()
+        self._refresh_browser_hint()
+        log_signal.append_log.emit("INFO", f"代理浏览器 → 127.0.0.1:{port}（拓扑起始页）")
+
+    def _stop_proxy_browser(self) -> None:
+        if self._proxy_browser and self._proxy_browser.isRunning():
+            self._proxy_browser.stop()
+            self.browser_hint.setText("正在关闭…")
+
+    def _on_proxy_browser_failed(self, err: str) -> None:
+        log_signal.append_log.emit("ERROR", f"[浏览器] {err}")
+        QMessageBox.warning(self, "启动浏览器失败", err)
+
+    def _on_proxy_browser_stopped(self) -> None:
+        self._proxy_browser = None
+        self._refresh_browser_hint()
 
     def _profile_roles(self, name: str) -> list:
         path = os.path.join(PROFILES_DIR, f"{name}.yaml")
@@ -656,7 +754,7 @@ class ControlPanel(QFrame):
         name_edit = QLineEdit()
         name_edit.setPlaceholderText("如 my_app（自动转小写，中文/数字会规范化）")
         fl.addRow("项目名称:", name_edit)
-        cb_decrypt = QCheckBox("🔓 解密 (8080解密端, 解密请求体)"); cb_decrypt.setChecked(True); fl.addRow(cb_decrypt)
+        cb_decrypt = QCheckBox("🔓 解密 (监听解密端, 解密请求体)"); cb_decrypt.setChecked(True); fl.addRow(cb_decrypt)
         cb_encrypt = QCheckBox("🔒 加密 (8081加密端, 加密+签名)"); cb_encrypt.setChecked(True); fl.addRow(cb_encrypt)
         btn = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         btn.accepted.connect(dlg.accept); btn.rejected.connect(dlg.reject); fl.addRow(btn)
@@ -669,27 +767,20 @@ class ControlPanel(QFrame):
         if cb_decrypt.isChecked(): roles.append("decrypt")
         if cb_encrypt.isChecked(): roles.append("encrypt")
 
-        # 创建插件目录和空模板 (不复制demo代码)
+        # 创建插件目录和空白 mitmdump 模板（合法 HTTPFlow，可直接启动）
         plugin_dir = os.path.join(PLUGINS_DIR, name)
         os.makedirs(plugin_dir, exist_ok=True)
         plugin_path = os.path.join(plugin_dir, "plugin.py")
-        content = f'''"""插件: {name} — 由 {APP_TITLE} 生成."""
-
-
-def request(ctx):
-    # TODO: 在请求解析器中粘贴报文, 左键点击字段添加加解密步骤
-    pass
-
-
-def response(ctx):
-    pass
-'''
+        content = blank_plugin_template(name)
         with open(plugin_path, "w", encoding="utf-8") as f: f.write(content)
 
-        # 创建profile
+        # 创建profile（默认匹配放宽，避免「启动了但完全没流量」）
         profile_path = os.path.join(PROFILES_DIR, f"{name}.yaml")
         with open(profile_path, "w", encoding="utf-8") as f:
-            f.write(f"name: {name}\ndescription: ''\nplugin: {name}\nroles: {roles}\nmatch:\n  host:\n    - '*'\n  path:\n    - /api/*\n  methods:\n    - POST\n")
+            f.write(
+                f"name: {name}\ndescription: ''\nplugin: {name}\nroles: {roles}\n"
+                f"{default_profile_match_yaml()}"
+            )
 
         # 清除所有旧数据 BEFORE refresh (否则refresh会加载旧项目的state)
         shared_pipeline.steps = []
@@ -1793,7 +1884,13 @@ class RequestParserTab(QWidget):
         profile_path = os.path.join(PROFILES_DIR, f"{name}.yaml")
         if not os.path.exists(profile_path):
             with open(profile_path, "w", encoding="utf-8") as f:
-                f.write(f"name: {name}\ndescription: ''\nplugin: {plugin_name}\nroles: [decrypt, encrypt]\nmatch:\n  host:\n    - {host}\n  path:\n    - /api/*\n  methods:\n    - POST\n")
+                f.write(
+                    f"name: {name}\ndescription: ''\nplugin: {plugin_name}\n"
+                    f"roles: [decrypt, encrypt]\n"
+                    f"match:\n  host:\n    - {host}\n"
+                    f"  path:\n    - '*'\n"
+                    f"  methods:\n    - POST\n    - PUT\n    - PATCH\n    - GET\n"
+                )
 
         log_signal.append_log.emit("INFO", f"已保存项目: {name}")
         self.mark_summary_label.setText(f"已保存到项目: {name} | 共 {len(steps)} 个步骤")
@@ -2555,7 +2652,10 @@ class VisualBuilderTab(QWidget):
         profile_path = os.path.join(PROFILES_DIR, f"{name}.yaml")
         if not os.path.exists(profile_path):
             with open(profile_path, "w", encoding="utf-8") as f:
-                f.write(f"name: {name}\ndescription: ''\nplugin: {plugin_name}\nroles: [decrypt, encrypt]\nmatch:\n  host:\n    - '*'\n  path:\n    - /api/*\n  methods:\n    - POST\n")
+                f.write(
+                    f"name: {name}\ndescription: ''\nplugin: {plugin_name}\n"
+                    f"roles: [decrypt, encrypt]\n{default_profile_match_yaml()}"
+                )
         log_signal.append_log.emit("INFO", f"可视化构建器: 已保存代码 → 项目 {name}")
         QMessageBox.information(self, "成功", f"代码已保存到 plugins/{plugin_name}/plugin.py")
 
@@ -2993,29 +3093,30 @@ class MainWindow(QMainWindow):
         apply_window_frame(self, current_theme(), C)
 
     def _build_ui(self):
-        c=QWidget(); self.setCentralWidget(c)
-        s=QSplitter(Qt.Orientation.Horizontal)
-        self.control=ControlPanel()
+        c = QWidget()
+        self.setCentralWidget(c)
+        s = QSplitter(Qt.Orientation.Horizontal)
+        self.control = ControlPanel()
         self.control.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         s.addWidget(self.control)
-        self.tabs=QTabWidget()
+        self.tabs = QTabWidget()
         setup_main_tabs(self.tabs)
-        self.home_tab=HomeTab()
+        self.home_tab = HomeTab()
         _tint = C["text_dim"]
         self.tabs.addTab(self.home_tab, icon("home", tint=_tint), "主页")
-        self.parser_tab=RequestParserTab()
+        self.parser_tab = RequestParserTab()
         self.tabs.addTab(self.parser_tab, icon("upload", tint=_tint), "请求解析器")
-        self.visual_builder_tab=VisualBuilderTab()
+        self.visual_builder_tab = VisualBuilderTab()
         self.tabs.addTab(self.visual_builder_tab, icon("builder", tint=_tint), "可视化构建器")
-        self.ai_lab_tab=AILabTab()
+        self.ai_lab_tab = AILabTab()
         self.tabs.addTab(self.ai_lab_tab, icon("code", tint=_tint), "AI自动化分析")
-        self.plugin_editor_tab=ExtensionEditorTab()
+        self.plugin_editor_tab = ExtensionEditorTab()
         self.tabs.addTab(self.plugin_editor_tab, icon("plugin", tint=_tint), "插件编辑器")
-        self.analyzer_tab=CryptoAnalyzerTab()
+        self.analyzer_tab = CryptoAnalyzerTab()
         self.tabs.addTab(self.analyzer_tab, icon("analyzer", tint=_tint), "加密分析")
-        self.crypto_tab=CryptoTab()
-        self.log_tab=LogTab()
-        self.settings_hub_tab=SettingsHubTab(
+        self.crypto_tab = CryptoTab()
+        self.log_tab = LogTab()
+        self.settings_hub_tab = SettingsHubTab(
             self.control, self.crypto_tab, self.log_tab,
         )
         self.tabs.addTab(self.settings_hub_tab, icon("setting", tint=_tint), "设置")
@@ -3029,10 +3130,21 @@ class MainWindow(QMainWindow):
             "log": self.log_tab,
             "settings": self.settings_hub_tab,
         })
-        s.addWidget(self.tabs); s.setSizes([220, 1180])
+        # 工作区嵌板（直角、无阴影，少一点模板感）
+        work = QFrame()
+        work.setObjectName("workspacePane")
+        work_layout = QVBoxLayout(work)
+        work_layout.setContentsMargins(0, 0, 0, 0)
+        work_layout.setSpacing(0)
+        work_layout.addWidget(self.tabs)
+        s.addWidget(work)
+        s.setSizes([220, 1180])
         s.setStretchFactor(0, 0)
         s.setStretchFactor(1, 1)
-        ml=QHBoxLayout(c); ml.setContentsMargins(0,0,0,0); ml.addWidget(s)
+        ml = QHBoxLayout(c)
+        ml.setContentsMargins(4, 4, 4, 4)
+        ml.setSpacing(0)
+        ml.addWidget(s)
 
     def open_settings_hub(self, page: int | None = None) -> None:
         """打开设置中心；page 见 SettingsHubTab.PAGE_*."""
@@ -3120,7 +3232,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self, "端口冲突",
                 f"解密端端口 ({port}) 与 Burp 端口相同，请修改其中一个。\n"
-                "常见配置：解密端 8080，Burp 8083。",
+                "常见配置：Burp 8080，解密端监听 8083。",
             )
             return
         if is_port_in_use(port):
@@ -3363,7 +3475,7 @@ class MainWindow(QMainWindow):
                     self._emit_proxy_tip(tip, once_key=tip[:40])
             log_signal.append_log.emit("INFO", f"[{tag}] {line.strip()}")
 
-    def _on_decrypt_finished(self, c, s, port: int = 8080):
+    def _on_decrypt_finished(self, c, s, port: int = 8083):
         user_stop = getattr(self, "_decrypt_user_stop", False)
         self._decrypt_user_stop = False
         self.control.set_decrypt_running(False)
@@ -3398,6 +3510,24 @@ class MainWindow(QMainWindow):
                 save_project_state(name, getattr(self.control, "_last_raw", ""))
             except Exception as e:
                 logging.warning("关闭时保存项目状态失败: %s", e)
+        # 先停小程序抓包，恢复系统代理，避免退出后整机上网异常
+        try:
+            lab = getattr(self, "ai_lab_tab", None)
+            panel = getattr(lab, "miniprogram_panel", None) if lab else None
+            if panel is not None and hasattr(panel, "stop_capture_if_running"):
+                panel.stop_capture_if_running()
+            if lab is not None and hasattr(lab, "stop_btn") and lab.stop_btn.isEnabled():
+                lab._stop_browser()
+        except Exception as ex:
+            logging.warning("关闭时停止采集失败: %s", ex)
+        try:
+            if hasattr(self.control, "_stop_proxy_browser"):
+                self.control._stop_proxy_browser()
+                br = getattr(self.control, "_proxy_browser", None)
+                if br is not None and br.isRunning():
+                    br.wait(3000)
+        except Exception as ex:
+            logging.warning("关闭时停止代理浏览器失败: %s", ex)
         for p in [self.decrypt_process,self.encrypt_process]:
             if p: p.terminate(); p.waitForFinished(2000)
         e.accept()

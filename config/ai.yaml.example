@@ -1,6 +1,8 @@
 # 复制为 ai.yaml 后填入你的 API Key（ai.yaml 已在 .gitignore 中，不会提交）
 api_key: "your-api-key-here"
 base_url: https://api.deepseek.com/v1
+agent_base_url: ""
+agent_max_steps: 50
 browser:
   headless: false
   hook_enabled: true

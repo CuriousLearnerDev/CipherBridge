@@ -193,7 +193,8 @@ class MiniprogramPanel(QWidget):
         self.sys_proxy_check.setEnabled(system_proxy_supported())
         self.sys_proxy_check.setToolTip(
             "会接管本机 HTTP(S)；列表只显示下方过滤后的流量。"
-            "停止时自动恢复；若无流量请退出微信重开"
+            "停止抓包或关闭软件会自动恢复代理。"
+            "AI API 域名已默认直连；若无流量请完全退出微信后重开"
         )
         cap.addWidget(self.sys_proxy_check)
         layout.addLayout(cap)
@@ -496,7 +497,8 @@ class MiniprogramPanel(QWidget):
             self._log("已屏蔽常见系统噪音域名")
         if self.sys_proxy_check.isChecked() and system_proxy_supported():
             self._log("已开启系统代理；若微信无流量，请完全退出微信后重开。")
-            self._log("提示：系统代理仍会转发全机流量，列表只显示过滤后的请求。")
+            self._log("提示：系统代理仍会转发全机流量，列表只显示过滤后的请求；关闭软件会自动恢复代理。")
+            self._log("提示：AI API 等域名已直连，生成脚本前仍会自动停抓包以确保出网。")
 
     def _on_capture_stopped(self):
         self.capture_btn.setText("启动抓包")

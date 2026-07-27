@@ -1,8 +1,9 @@
 """Mitm引擎 — mitmproxy addon，核心入口.
 
 端口职责:
-  8080 解密端 (PROXY_ROLE=decrypt): request() 解密请求体 → 转发Burp
+  8083 解密端 (PROXY_ROLE=decrypt): request() 解密请求体 → 转发Burp
   8081 加密端 (PROXY_ROLE=encrypt): request() 加密请求体+签名 → 转发服务器
+  Burp 默认 8080
 
 插件标准: def request(ctx) / def response(ctx)
 环境变量:
@@ -39,7 +40,7 @@ class MitmEngine:
         self.loader = PluginLoader()
         self.loader.load_all_profiles()
         self.role = os.environ.get("PROXY_ROLE", "decrypt")
-        self.burp_port = os.environ.get("BURP_PORT", "8083")
+        self.burp_port = os.environ.get("BURP_PORT", "8080")
         self.forced_profile = os.environ.get("PROFILE", "").strip()
         _cp_log(
             f"MitmEngine 已初始化 | role={self.role} | profile={self.forced_profile or '(auto)'} | →Burp:{self.burp_port}"

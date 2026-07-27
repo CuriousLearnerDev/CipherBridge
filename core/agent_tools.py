@@ -8,10 +8,11 @@ from typing import Any, Callable
 from agent_core.tools.base import BaseTool, ToolMetadata
 
 MAX_LIST = 40
-MAX_BODY = 8_000
-MAX_SCRIPT_CHUNK = 12_000
+MAX_BODY = 12_000
+MAX_SCRIPT_CHUNK = 8_000
 MAX_SEARCH_HITS = 25
-MAX_HOOK_LINES = 80
+MAX_HOOK_LINES = 120
+MAX_SEARCH_CONTEXT = 2_400
 
 
 def _clip(text: str, n: int) -> str:
@@ -163,7 +164,16 @@ class HookTool(BaseTool):
         if action == "list":
             limit = int(kwargs.get("limit") or MAX_HOOK_LINES)
             tail = lines[-max(1, min(limit, 200)) :]
-            return {"total": len(lines), "lines": [_clip(x, 400) for x in tail]}
+            # Key/IV 行尽量不截断
+            out = []
+            for x in tail:
+                raw = x or ""
+                low = raw.casefold()
+                if any(k in low for k in ("key", "iv", "aes", "crypto", "mode", "padding")):
+                    out.append(_clip(raw, 900))
+                else:
+                    out.append(_clip(raw, 400))
+            return {"total": len(lines), "lines": out}
 
         if action == "search":
             query = str(kwargs.get("query") or kwargs.get("q") or kwargs.get("text") or "").strip()
@@ -238,26 +248,51 @@ class ScriptTool(BaseTool):
                 ),
             )
             hits = []
+            qlow = query.casefold()
             for url, content in ordered:
                 text = content or ""
                 if not (_ci_contains(url, query) or _ci_contains(text, query)):
                     continue
                 low = text.casefold()
-                pos = low.find(query.casefold())
-                snippet = ""
-                if pos >= 0:
-                    start = max(0, pos - 80)
-                    snippet = _clip(text[start : pos + len(query) + 160], 500)
-                hits.append(
-                    {
-                        "url": url,
-                        "chars": len(text),
-                        "snippet": snippet or _clip(text, 200),
-                    }
-                )
+                # 同一文件可返回多处命中（最多 3 处）
+                pos = 0
+                found_here = 0
+                while found_here < 3:
+                    pos = low.find(qlow, pos)
+                    if pos < 0:
+                        break
+                    start = max(0, pos - 200)
+                    end = min(len(text), pos + len(query) + MAX_SEARCH_CONTEXT)
+                    hits.append(
+                        {
+                            "url": url,
+                            "chars": len(text),
+                            "match_offset": pos,
+                            "read_hint": f"script.read url=... offset={max(0, pos - 200)}",
+                            "context": text[start:end],
+                        }
+                    )
+                    found_here += 1
+                    pos += max(len(query), 1)
+                    if len(hits) >= MAX_SEARCH_HITS:
+                        break
+                if found_here == 0 and _ci_contains(url, query):
+                    hits.append(
+                        {
+                            "url": url,
+                            "chars": len(text),
+                            "match_offset": 0,
+                            "context": _clip(text, 200),
+                        }
+                    )
                 if len(hits) >= MAX_SEARCH_HITS:
                     break
-            return {"query": query, "hit_count": len(hits), "hits": hits}
+            return {
+                "query": query,
+                "hit_count": len(hits),
+                "hits": hits,
+                "note": "请用 match_offset 作为 script.read 的 offset；context 通常已够下结论",
+            }
 
         if action == "read":
             url = str(

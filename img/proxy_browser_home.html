@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>密桥 CipherBridge — 代理浏览器</title>
+  <style>
+    :root {
+      --bg: #1a1b1d;
+      --bar: #222326;
+      --line: #3a3b40;
+      --text: #d0d1d4;
+      --muted: #888a90;
+      --ok: #7fa07c;
+      --bar-h: 40px;
+      --foot-h: 36px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+    }
+    body {
+      display: grid;
+      grid-template-rows: var(--bar-h) minmax(0, 1fr) var(--foot-h);
+      background: var(--bg);
+    }
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      background: var(--bar);
+      border-bottom: 1px solid var(--line);
+    }
+    .brand-name { font-size: 13px; font-weight: 600; }
+    .brand-en { font-size: 12px; color: var(--muted); margin-left: 8px; }
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--ok);
+    }
+    .stage {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+      padding: 20px 24px;
+      overflow: hidden;
+    }
+    .figure {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0;
+      max-width: 100%;
+      max-height: 100%;
+    }
+    .figure img {
+      display: block;
+      width: auto;
+      height: auto;
+      max-width: min(1100px, 92vw);
+      max-height: calc(100vh - var(--bar-h) - var(--foot-h) - 40px);
+      object-fit: contain;
+      border: 1px solid var(--line);
+    }
+    .footer {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      color: var(--muted);
+      border-top: 1px solid var(--line);
+      background: var(--bar);
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <span class="brand-name">密桥</span>
+      <span class="brand-en">CipherBridge · 代理浏览器</span>
+    </div>
+    <div class="status">
+      <span class="dot"></span>
+      <span>已就绪 · 流量经解密端代理</span>
+    </div>
+  </header>
+  <main class="stage">
+    <figure class="figure">
+      <img
+        src="e2f83ef5-edda-4dbf-a8f0-cf24bbc920aa.png"
+        alt="部署拓扑"
+      />
+    </figure>
+  </main>
+  <p class="footer">在地址栏输入目标站点开始调试 · 关闭窗口即退出</p>
+</body>
+</html>

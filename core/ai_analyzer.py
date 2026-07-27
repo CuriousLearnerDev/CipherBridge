@@ -1,4 +1,4 @@
-"""AI 分析 — 结合 Hook 日志与 HTTP 流量，生成 CryptoProxy 步骤 JSON."""
+"""AI 分析 — 结合 Hook 日志与 HTTP 流量，生成密桥 CipherBridge 步骤 JSON."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ SYSTEM_PROMPT_DECRYPT = """你是 JavaScript 逆向与 HTTP 加解密分析专�
 
 规则:
 1. type 必须从提供的步骤类型列表中选择
-2. params 字段名与 CryptoProxy 构建器一致
+2. params 字段名与密桥 CipherBridge 可视化构建器一致
 3. 密钥优先从 Hook 日志提取，不要编造
 4. 不确定时 confidence 设为 low，并在 summary 说明需人工确认
 5. **解密端请求用 🔓 解密字段**；**响应体加密时用 🔓 解密响应字段**（field 支持嵌套路径如 result.data）
@@ -91,60 +91,221 @@ _CRYPTO_KW = re.compile(
 
 
 def _extract_json(text: str) -> dict:
-    text = text.strip()
-    m = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
-    if m:
-        text = m.group(1).strip()
-    start = text.find("{")
-    end = text.rfind("}")
+    """从模型回复中提取 JSON；优先含 steps 的对象。"""
+    raw = (text or "").strip()
+    if not raw:
+        raise ValueError("empty response")
+
+    candidates: list[str] = []
+    for m in re.finditer(r"```(?:json)?\s*([\s\S]*?)```", raw, flags=re.I):
+        candidates.append(m.group(1).strip())
+
+    # 扫描所有 {...} 平衡片段（从每个 { 起做括号匹配）
+    def _balanced_objects(s: str) -> list[str]:
+        out = []
+        i = 0
+        while i < len(s):
+            if s[i] != "{":
+                i += 1
+                continue
+            depth = 0
+            in_str = False
+            esc = False
+            for j in range(i, len(s)):
+                ch = s[j]
+                if in_str:
+                    if esc:
+                        esc = False
+                    elif ch == "\\":
+                        esc = True
+                    elif ch == '"':
+                        in_str = False
+                    continue
+                if ch == '"':
+                    in_str = True
+                elif ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        out.append(s[i : j + 1])
+                        i = j + 1
+                        break
+            else:
+                break
+            continue
+        return out
+
+    candidates.extend(_balanced_objects(raw))
+    # 兼容旧逻辑：首尾大括号
+    start, end = raw.find("{"), raw.rfind("}")
     if start >= 0 and end > start:
-        text = text[start : end + 1]
-    return json.loads(text)
+        candidates.append(raw[start : end + 1])
+
+    parsed_list: list[dict] = []
+    for cand in candidates:
+        cleaned = re.sub(r",\s*([}\]])", r"\1", cand.strip())
+        for blob in (cleaned, cand.strip()):
+            try:
+                obj = json.loads(blob)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if isinstance(obj, dict):
+                parsed_list.append(obj)
+                break
+
+    if not parsed_list:
+        raise ValueError("no json object found")
+
+    # 优先带非空 steps 的
+    for obj in parsed_list:
+        steps = obj.get("steps")
+        if isinstance(steps, list) and steps:
+            return obj
+    for obj in parsed_list:
+        if "steps" in obj or "summary" in obj or "confidence" in obj:
+            return obj
+    return parsed_list[0]
 
 
 def _bad_value(val) -> bool:
     return str(val or "").strip().lower() in ("unknown", "?", "null", "none", "n/a", "")
 
 
+_STEP_TYPE_ALIASES = {
+    "decrypt": "🔓 解密字段",
+    "decrypt_field": "🔓 解密字段",
+    "解密": "🔓 解密字段",
+    "解密字段": "🔓 解密字段",
+    "aes_decrypt": "🔓 解密字段",
+    "encrypt": "🔒 加密字段",
+    "encrypt_field": "🔒 加密字段",
+    "加密": "🔒 加密字段",
+    "加密字段": "🔒 加密字段",
+    "decrypt_response": "🔓 解密响应字段",
+    "解密响应": "🔓 解密响应字段",
+    "解密响应字段": "🔓 解密响应字段",
+    "encrypt_response": "🔒 加密响应字段",
+    "加密响应": "🔒 加密响应字段",
+    "加密响应字段": "🔒 加密响应字段",
+    "hash": "📝 签名(Hash)",
+    "md5": "📝 签名(Hash)",
+    "hmac": "📝 签名(HMAC带密钥)",
+    "encode": "🔤 编码转换",
+    "encoding": "🔤 编码转换",
+    "编码转换": "🔤 编码转换",
+}
+
+
+def _normalize_step_type(stype) -> str:
+    if not stype:
+        return ""
+    s = str(stype).strip()
+    if s in BUILTIN_STEP_TYPES:
+        return s
+    # 去掉可能的全角空格
+    s2 = s.replace("\u3000", " ")
+    if s2 in BUILTIN_STEP_TYPES:
+        return s2
+    key = s2.casefold().replace(" ", "").replace("_", "")
+    for alias, canon in _STEP_TYPE_ALIASES.items():
+        if alias.replace(" ", "").casefold() == key or alias == s2:
+            return canon
+    # 模糊：包含关键词
+    low = s2.casefold()
+    if "解密响应" in s2:
+        return "🔓 解密响应字段"
+    if "加密响应" in s2:
+        return "🔒 加密响应字段"
+    if "解密" in s2:
+        return "🔓 解密字段"
+    if "加密" in s2 and "响应" not in s2:
+        return "🔒 加密字段"
+    if "hmac" in low:
+        return "📝 签名(HMAC带密钥)"
+    if "hash" in low or "md5" in low or "sha" in low:
+        return "📝 签名(Hash)"
+    return s
+
+
+def _sanitize_key(val) -> str:
+    """从 Hook 风格字符串里抠出密钥。"""
+    s = str(val or "").strip()
+    if not s:
+        return ""
+    m = re.search(
+        r"(?:Key\s*\((?:String|WordArray|Hex)\)|Key)\s*[:：]\s*([^\s,;]+)",
+        s,
+        flags=re.I,
+    )
+    if m:
+        return m.group(1).strip().strip("'\"")
+    return s
+
+
 def _clean_steps(result: dict, role: str = "decrypt") -> dict:
     valid_types = set(BUILTIN_STEP_TYPES) | set(get_extension_choices())
     steps = result.get("steps") or []
     cleaned = []
+    dropped: list[str] = []
     for s in steps:
-        stype = s.get("type")
-        if stype not in valid_types or not isinstance(s.get("params"), dict):
+        if not isinstance(s, dict):
+            dropped.append("非对象步骤已跳过")
             continue
-        params = dict(s["params"])
+        stype = _normalize_step_type(s.get("type"))
+        if stype not in valid_types:
+            dropped.append(f"未知类型: {s.get('type') or '(空)'}")
+            continue
+        params_raw = s.get("params")
+        if params_raw is None:
+            params_raw = {}
+        if not isinstance(params_raw, dict):
+            dropped.append(f"{stype}: params 无效")
+            continue
+        params = dict(params_raw)
+        if "key" in params:
+            params["key"] = _sanitize_key(params.get("key"))
         if role == "encrypt":
             if stype == "🔓 解密字段":
                 if _bad_value(params.get("key")):
+                    dropped.append(f"{stype}: key 无效/unknown")
                     continue
                 stype = "🔒 加密字段"
             elif stype == "🔒 加密字段" and _bad_value(params.get("key")):
+                dropped.append(f"{stype}: key 无效/unknown")
                 continue
             elif stype == "🔓 解密响应字段":
                 if _bad_value(params.get("key")):
+                    dropped.append(f"{stype}: key 无效/unknown")
                     continue
                 stype = "🔒 加密响应字段"
             elif stype == "🔒 加密响应字段" and _bad_value(params.get("key")):
+                dropped.append(f"{stype}: key 无效/unknown")
                 continue
         else:
             if stype == "🔒 加密字段":
                 if _bad_value(params.get("key")):
+                    dropped.append(f"{stype}: key 无效/unknown")
                     continue
                 stype = "🔓 解密字段"
             elif stype == "🔓 解密字段" and _bad_value(params.get("key")):
+                dropped.append(f"{stype}: key 无效/unknown")
                 continue
             elif stype == "🔒 加密响应字段":
                 if _bad_value(params.get("key")):
+                    dropped.append(f"{stype}: key 无效/unknown")
                     continue
                 stype = "🔓 解密响应字段"
             elif stype == "🔓 解密响应字段" and _bad_value(params.get("key")):
+                dropped.append(f"{stype}: key 无效/unknown")
                 continue
         if stype in ("🔓 解密字段", "🔒 加密字段", "🔓 解密响应字段", "🔒 加密响应字段"):
             for k in ("mode", "padding", "algo"):
                 if _bad_value(params.get(k)):
                     params.pop(k, None)
+            # 缺 field 时尽量给默认，避免整步丢掉
+            if _bad_value(params.get("field")):
+                params["field"] = "data"
         cleaned.append(normalize_step_params({"type": stype, "params": params}))
     before = len(cleaned)
     cleaned = optimize_pipeline_steps(cleaned)
@@ -152,6 +313,8 @@ def _clean_steps(result: dict, role: str = "decrypt") -> dict:
         note = "（已自动合并多余的 Base64/Hex 编解码步骤）"
         result["summary"] = f"{result.get('summary', '')}{note}".strip()
     result["steps"] = cleaned
+    if dropped:
+        result["_dropped"] = dropped
     if not cleaned and result.get("confidence") != "low":
         result["confidence"] = "low"
     return result

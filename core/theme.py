@@ -1,4 +1,4 @@
-"""密桥全局主题 — 工位工具风 QSS（扁、少色、少圆角），支持亮/暗切换."""
+"""密桥全局主题 — 工位工具风；保留层级，去掉青绿/大圆角/阴影等模板感."""
 
 from __future__ import annotations
 
@@ -7,57 +7,63 @@ from PyQt6.QtGui import QFont, QPalette, QColor
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication, QLabel, QWidget, QComboBox, QPushButton, QVBoxLayout, QFrame
 
-# 视觉原则：单强调色、直角偏多、少卡片堆叠；绿色只表示「运行中」，不做按钮主色。
+# 钢灰主色、小圆角；绿仅表示运行中。亮色为浅灰白面板。
 PALETTES: dict[str, dict[str, str]] = {
     "dark": {
-        "bg": "#161718",
-        "surface": "#1e1f21",
-        "surface2": "#27282a",
-        "border": "#353638",
-        "text": "#c8c9cb",
-        "text_dim": "#7a7c80",
-        "accent": "#8a9aab",
-        "primary": "#8a9aab",
-        "danger": "#b87a72",
-        "warn": "#b89a5a",
-        "ok": "#7a9a78",
+        "bg": "#1a1b1d",
+        "surface": "#222326",
+        "surface2": "#2b2c30",
+        "border": "#3a3b40",
+        "text": "#d0d1d4",
+        "text_dim": "#888a90",
+        "accent": "#9aa3ad",
+        "primary": "#8a939e",
+        "primary_hover": "#a4adb8",
+        "danger": "#c47a72",
+        "warn": "#c4a45a",
+        "ok": "#7fa07c",
         "purple": "#8a8498",
         "teal": "#7a9490",
-        "input_bg": "#121314",
-        "selection": "#2e3844",
-        "code_bg": "#101112",
-        "code_fg": "#c8c9cb",
-        "tab_text": "#7a7c80",
-        "tab_text_selected": "#e0e1e2",
+        "input_bg": "#141516",
+        "selection": "#343a44",
+        "code_bg": "#121314",
+        "code_fg": "#d0d1d4",
+        "tab_text": "#888a90",
+        "tab_text_selected": "#ececee",
         "danger_hover_bg": "#3a2a28",
-        "primary_fg": "#121314",
-        "accent_fg": "#121314",
-        "focus": "#8a9aab",
+        "primary_fg": "#141516",
+        "accent_fg": "#141516",
+        "focus": "#9aa3ad",
+        "badge_bg": "#2b2c30",
+        "pane": "#1c1d20",
     },
     "light": {
-        "bg": "#ececed",
-        "surface": "#f7f7f8",
-        "surface2": "#e2e3e5",
-        "border": "#c4c5c8",
-        "text": "#1a1b1d",
-        "text_dim": "#63666b",
-        "accent": "#4a5c6e",
-        "primary": "#4a5c6e",
+        "bg": "#f0f0f0",
+        "surface": "#ffffff",
+        "surface2": "#f5f5f5",
+        "border": "#d0d0d0",
+        "text": "#222222",
+        "text_dim": "#666666",
+        "accent": "#4f5966",
+        "primary": "#4f5966",
+        "primary_hover": "#3a4350",
         "danger": "#a05048",
         "warn": "#8a6e30",
         "ok": "#3d6b45",
         "purple": "#5c5670",
         "teal": "#3d6a64",
         "input_bg": "#ffffff",
-        "selection": "#c8d4e0",
+        "selection": "#d0d6de",
         "code_bg": "#1a1b1d",
         "code_fg": "#d4d5d6",
-        "tab_text": "#63666b",
-        "tab_text_selected": "#1a1b1d",
+        "tab_text": "#666666",
+        "tab_text_selected": "#111111",
         "danger_hover_bg": "#f5e8e6",
         "primary_fg": "#ffffff",
         "accent_fg": "#ffffff",
-        "focus": "#4a5c6e",
+        "focus": "#4f5966",
+        "badge_bg": "#e8e8ea",
+        "pane": "#ffffff",
     },
 }
 
@@ -73,12 +79,13 @@ def current_theme() -> str:
 
 
 def build_theme_qss(c: dict[str, str]) -> str:
-    r = "3px"  # 全局圆角：工具感，避免胶囊/大圆角
+    r = "4px"
+    pane = c.get("pane", c["surface"])
     return f"""
 QWidget {{
     background-color: {c['bg']};
     color: {c['text']};
-    font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+    font-family: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
     font-size: 12px;
 }}
 QMainWindow {{ background-color: {c['bg']}; }}
@@ -92,31 +99,38 @@ QMainWindow {{ background-color: {c['bg']}; }}
     border: none;
     border-top: 1px solid {c['border']};
     border-radius: 0;
-    margin-top: 8px;
-    padding: 10px 2px 4px 2px;
+    margin-top: 10px;
+    padding: 12px 2px 6px 2px;
     font-weight: 600;
-    font-size: 11px;
+    font-size: 10px;
+    color: {c['text_dim']};
 }}
 #sidebar QGroupBox::title {{
     subcontrol-origin: margin;
     subcontrol-position: top left;
     left: 0;
-    padding: 0 0 4px 0;
+    padding: 0 0 6px 0;
     color: {c['text_dim']};
+    font-weight: 600;
 }}
 #sidebar QPushButton {{
-    min-height: 24px;
-    padding: 3px 8px;
+    min-height: 26px;
+    padding: 4px 10px;
     border-radius: {r};
 }}
 #sidebar QComboBox, #sidebar QSpinBox {{
-    min-height: 22px;
-    padding: 2px 5px;
+    min-height: 24px;
+    padding: 3px 6px;
     border-radius: {r};
 }}
+#workspacePane {{
+    background-color: {pane};
+    border: 1px solid {c['border']};
+    border-radius: 0;
+}}
 #appTitle {{
-    font-size: 13px;
-    font-weight: 600;
+    font-size: 14px;
+    font-weight: 700;
     background: transparent;
 }}
 #appSubtitle {{
@@ -129,18 +143,19 @@ QMainWindow {{ background-color: {c['bg']}; }}
     border: none;
     border-radius: 0;
     margin: 0;
-    padding-bottom: 6px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid {c['border']};
 }}
 #sidebarBrandLogo {{
-    background: transparent;
-    border: none;
-    border-radius: 0;
-    padding: 0;
+    background: {c['surface2']};
+    border: 1px solid {c['border']};
+    border-radius: {r};
+    padding: 2px;
 }}
 #sidebarBrandNameCn {{
-    font-size: 14px;
-    font-weight: 600;
-    letter-spacing: 0;
+    font-size: 15px;
+    font-weight: 700;
+    
     color: {c['text']};
     background: transparent;
 }}
@@ -149,13 +164,22 @@ QMainWindow {{ background-color: {c['bg']}; }}
     font-weight: 500;
     color: {c['text_dim']};
     background: transparent;
-    padding-top: 0;
+}}
+#sidebarBrandVersion {{
+    font-size: 9px;
+    font-weight: 600;
+    color: {c['accent']};
+    background: {c['badge_bg']};
+    border: 1px solid {c['border']};
+    border-radius: 4px;
+    padding: 1px 6px;
 }}
 #sidebarBrandSub {{
     font-size: 10px;
     font-weight: 400;
     color: {c['text_dim']};
     background: transparent;
+    padding-top: 1px;
 }}
 #sidebarBrandDivider {{
     background-color: {c['border']};
@@ -166,6 +190,7 @@ QMainWindow {{ background-color: {c['bg']}; }}
     font-size: 9px;
     color: {c['text_dim']};
     background: transparent;
+    padding-top: 4px;
 }}
 #sidebarBrandCreditOrg {{
     font-size: 9px;
@@ -199,7 +224,7 @@ QMainWindow {{ background-color: {c['bg']}; }}
     border: 1px solid {c['border']};
     border-left: 2px solid {c['border']};
     border-radius: {r};
-    padding: 8px 10px;
+    padding: 10px 12px;
     color: {c['text_dim']};
 }}
 #aiHeroBtn {{
@@ -220,15 +245,15 @@ QGroupBox {{
     background-color: {c['surface']};
     border: 1px solid {c['border']};
     border-radius: {r};
-    margin-top: 10px;
-    padding: 12px 8px 8px 8px;
+    margin-top: 12px;
+    padding: 14px 10px 10px 10px;
     font-weight: 600;
 }}
 QGroupBox::title {{
     subcontrol-origin: margin;
     subcontrol-position: top left;
-    left: 6px;
-    padding: 0 4px;
+    left: 8px;
+    padding: 0 6px;
     color: {c['text_dim']};
 }}
 
@@ -236,18 +261,18 @@ QLineEdit, QSpinBox, QComboBox, QTextEdit, QPlainTextEdit {{
     background-color: {c['input_bg']};
     border: 1px solid {c['border']};
     border-radius: {r};
-    padding: 4px 8px;
+    padding: 6px 10px;
     color: {c['text']};
     selection-background-color: {c['selection']};
 }}
 QLineEdit:focus, QSpinBox:focus, QComboBox:focus, QTextEdit:focus, QPlainTextEdit:focus {{
     border: 1px solid {c['focus']};
 }}
-QComboBox {{ padding-right: 24px; min-height: 20px; }}
+QComboBox {{ padding-right: 24px; min-height: 22px; }}
 QComboBox::drop-down {{
     subcontrol-origin: padding;
     subcontrol-position: top right;
-    width: 20px;
+    width: 22px;
     border-left: 1px solid {c['border']};
     background-color: {c['surface2']};
     border-top-right-radius: {r};
@@ -308,25 +333,25 @@ QSpinBox::down-arrow {{
     font-family: "Cascadia Code", "Consolas", "Courier New", monospace;
     font-size: 12px;
     color: {c['code_fg']};
-    padding: 6px;
+    padding: 8px;
 }}
 
 QPushButton {{
-    background-color: {c['surface2']};
+    background-color: {c['surface']};
     border: 1px solid {c['border']};
     border-radius: {r};
-    padding: 4px 12px;
+    padding: 6px 16px;
     color: {c['text']};
-    min-height: 20px;
+    min-height: 24px;
 }}
 QPushButton:hover {{
-    background-color: {c['border']};
+    background-color: {c['surface2']};
     border-color: {c['text_dim']};
 }}
 QPushButton:pressed {{ background-color: {c['input_bg']}; }}
 QPushButton:disabled {{
     color: {c['text_dim']};
-    background-color: {c['surface']};
+    background-color: {c['surface2']};
     border-color: {c['border']};
 }}
 QPushButton[variant="primary"] {{
@@ -336,9 +361,14 @@ QPushButton[variant="primary"] {{
     font-weight: 600;
 }}
 QPushButton[variant="primary"]:hover {{
-    background-color: {c['text']};
-    border-color: {c['text']};
-    color: {c['bg']};
+    background-color: {c['primary_hover']};
+    border-color: {c['primary_hover']};
+    color: {c['primary_fg']};
+}}
+QPushButton[variant="primary"]:pressed {{
+    background-color: {c['surface2']};
+    border-color: {c['text_dim']};
+    color: {c['text']};
 }}
 QPushButton[variant="accent"] {{
     background-color: {c['accent']};
@@ -347,17 +377,17 @@ QPushButton[variant="accent"] {{
     font-weight: 600;
 }}
 QPushButton[variant="accent"]:hover {{
-    background-color: {c['text']};
-    border-color: {c['text']};
-    color: {c['bg']};
+    background-color: {c['primary_hover']};
+    border-color: {c['primary_hover']};
+    color: {c['accent_fg']};
 }}
 QPushButton[variant="warn"] {{
-    background-color: {c['surface2']};
+    background-color: {c['surface']};
     border: 1px solid {c['warn']};
     color: {c['warn']};
 }}
 QPushButton[variant="warn"]:hover {{
-    background-color: {c['surface']};
+    background-color: {c['surface2']};
 }}
 QPushButton[variant="danger"] {{
     background-color: transparent;
@@ -374,8 +404,8 @@ QPushButton[variant="danger_fill"] {{
     font-weight: 600;
 }}
 QPushButton[variant="danger_fill"]:hover {{
-    background-color: #9a554e;
-    border-color: #9a554e;
+    background-color: #dc5252;
+    border-color: #dc5252;
 }}
 QPushButton[variant="danger_fill"]:disabled {{
     background-color: {c['surface2']};
@@ -390,21 +420,22 @@ QPushButton[variant="ghost"] {{
 QPushButton[variant="ghost"]:hover {{
     color: {c['text']};
     background: {c['surface2']};
+    border-color: {c['text_dim']};
 }}
 
 QTabWidget::pane {{
     border: 1px solid {c['border']};
     border-radius: {r};
-    background: {c['bg']};
+    background: {pane};
     top: -1px;
-    padding: 4px;
+    padding: 8px;
 }}
 QTabBar::tab {{
     background: transparent;
     border: none;
     border-bottom: 2px solid transparent;
     border-radius: 0;
-    padding: 6px 12px;
+    padding: 8px 14px;
     margin: 0 1px;
     color: {c['tab_text']};
     min-height: 18px;
@@ -422,19 +453,22 @@ QTabBar::tab:hover:!selected {{
 QTabWidget#mainTabs::pane {{
     border: none;
     border-radius: 0;
-    background: {c['bg']};
-    padding: 10px 12px 12px 12px;
+    background: transparent;
+    padding: 12px 14px 14px 14px;
 }}
 QTabWidget#mainTabs QTabBar {{
-    background: {c['surface']};
+    background: transparent;
     border-bottom: 1px solid {c['border']};
+}}
+QTabWidget#mainTabs {{
+    background: transparent;
 }}
 QTabWidget#mainTabs QTabBar::tab {{
     background: transparent;
     border: none;
     border-bottom: 2px solid transparent;
     border-radius: 0;
-    padding: 10px 14px 8px 14px;
+    padding: 11px 16px 9px 16px;
     margin: 0;
     color: {c['tab_text']};
     min-height: 18px;
@@ -457,11 +491,12 @@ QTreeWidget, QListWidget, QTableWidget {{
     border-radius: {r};
     outline: none;
     alternate-background-color: {c['surface']};
-    padding: 1px;
+    padding: 2px;
 }}
 QTreeWidget::item, QListWidget::item {{
-    padding: 3px 5px;
-    border-radius: 0;
+    padding: 5px 8px;
+    border-radius: {r};
+    margin: 1px 2px;
 }}
 QTreeWidget::item:hover, QListWidget::item:hover {{
     background-color: {c['surface2']};
@@ -474,33 +509,33 @@ QHeaderView::section {{
     background: {c['surface2']};
     border: none;
     border-bottom: 1px solid {c['border']};
-    padding: 5px 8px;
+    padding: 6px 8px;
     color: {c['text_dim']};
     font-weight: 600;
 }}
 
 QScrollBar:vertical {{
     background: transparent;
-    width: 8px;
-    margin: 0;
+    width: 10px;
+    margin: 2px;
 }}
 QScrollBar::handle:vertical {{
     background: {c['border']};
-    min-height: 24px;
-    border-radius: 2px;
+    min-height: 28px;
+    border-radius: 4px;
 }}
 QScrollBar::handle:vertical:hover {{ background: {c['text_dim']}; }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
 QScrollBar:horizontal {{
     background: transparent;
-    height: 8px;
-    margin: 0;
+    height: 10px;
+    margin: 2px;
 }}
 QScrollBar::handle:horizontal {{
     background: {c['border']};
-    min-width: 24px;
-    border-radius: 2px;
+    min-width: 28px;
+    border-radius: 4px;
 }}
 QScrollBar::handle:horizontal:hover {{ background: {c['text_dim']}; }}
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
@@ -515,17 +550,17 @@ QMenu {{
     background: {c['surface2']};
     border: 1px solid {c['border']};
     border-radius: {r};
-    padding: 2px;
+    padding: 4px;
 }}
 QMenu::item {{
-    padding: 6px 18px;
-    border-radius: 0;
+    padding: 7px 20px;
+    border-radius: 4px;
 }}
 QMenu::item:selected {{ background: {c['selection']}; }}
 QMenu::separator {{
     height: 1px;
     background: {c['border']};
-    margin: 3px 6px;
+    margin: 4px 8px;
 }}
 
 QToolTip {{
@@ -539,14 +574,14 @@ QToolTip {{
 }}
 
 QToolButton {{
-    background-color: {c['surface2']};
+    background-color: {c['surface']};
     border: 1px solid {c['border']};
     border-radius: {r};
-    padding: 3px 8px;
+    padding: 4px 8px;
     color: {c['text']};
     min-height: 18px;
 }}
-QToolButton:hover {{ background-color: {c['border']}; }}
+QToolButton:hover {{ background-color: {c['surface2']}; }}
 QToolButton::menu-indicator {{ image: none; width: 0; }}
 
 QCheckBox {{
@@ -554,9 +589,9 @@ QCheckBox {{
     background: transparent;
 }}
 QCheckBox::indicator {{
-    width: 13px;
-    height: 13px;
-    border-radius: 2px;
+    width: 15px;
+    height: 15px;
+    border-radius: 4px;
     border: 1px solid {c['border']};
     background: {c['input_bg']};
 }}
@@ -565,12 +600,12 @@ QCheckBox::indicator:checked {{
     border-color: {c['accent']};
 }}
 QCheckBox::indicator:hover {{
-    border-color: {c['text_dim']};
+    border-color: {c['accent']};
 }}
 
 QPushButton[sidebarAux="true"] {{
-    padding: 2px 6px;
-    min-height: 16px;
+    padding: 2px 8px;
+    min-height: 18px;
     font-size: 11px;
     background: transparent;
     border-color: {c['border']};
@@ -579,6 +614,7 @@ QPushButton[sidebarAux="true"] {{
 QPushButton[sidebarAux="true"]:hover {{
     color: {c['text']};
     background: {c['surface2']};
+    border-color: {c['text_dim']};
 }}
 
 QFrame[card="true"] {{
@@ -602,7 +638,7 @@ QPushButton[compact="true"] {{
 }}
 
 QLabel[feedbackBox="true"] {{
-    padding: 6px 8px;
+    padding: 8px 10px;
     font-size: 11px;
     border-radius: {r};
     background: {c['input_bg']};
@@ -611,22 +647,21 @@ QLabel[feedbackBox="true"] {{
 QLabel[feedbackKind="error"] {{ color: {c['danger']}; border-color: {c['danger']}; }}
 
 #homeHeroTitle {{
-    font-size: 18px;
-    font-weight: 600;
+    font-size: 22px;
+    font-weight: 700;
     background: transparent;
 }}
 #homeHeroSub {{
-    font-size: 12px;
+    font-size: 13px;
     color: {c['text_dim']};
     background: transparent;
 }}
 #homeSectionTitle {{
     font-size: 11px;
-    font-weight: 600;
+    font-weight: 700;
     color: {c['text_dim']};
     background: transparent;
-    padding-top: 2px;
-    text-transform: none;
+    padding-top: 4px;
 }}
 #homeStatStrip {{
     background: {c['surface']};
@@ -643,37 +678,54 @@ QLabel[feedbackKind="error"] {{ color: {c['danger']}; border-color: {c['danger']
     border: none;
     border-radius: 0;
 }}
-#homeNavCard, #homeWorkflow {{
-    background: transparent;
-    border: none;
-    border-radius: 0;
+#homeNavCard {{
+    background: {c['surface']};
+    border: 1px solid {c['border']};
+    border-radius: {r};
 }}
 #homeNavCard:hover {{
+    border-color: {c['text_dim']};
     background: {c['surface2']};
 }}
-#homeStatValue, #homeCardTitle {{
+#homeWorkflow {{
+    background: transparent;
+    border: none;
+    padding: 0;
+}}
+#homeWorkflowRow {{
+    background: transparent;
+    border: none;
+}}
+#homeStatValue {{
     font-size: 12px;
     font-weight: 600;
     background: transparent;
 }}
-#homeStepBadge {{
-    background: transparent;
-    border: none;
-    border-radius: 0;
-    color: {c['text_dim']};
+#homeCardTitle {{
+    font-size: 13px;
     font-weight: 600;
+    background: transparent;
+}}
+#homeStepBadge {{
+    background: {c['badge_bg']};
+    border: 1px solid {c['border']};
+    border-radius: {r};
+    color: {c['text_dim']};
+    font-weight: 700;
     font-size: 11px;
     font-family: "Cascadia Code", "Consolas", monospace;
+    padding: 2px 0;
 }}
 #homeTopology {{
-    background: transparent;
-    border: none;
-    padding: 2px 0;
+    background: {c['surface']};
+    border: 1px solid {c['border']};
+    border-radius: {r};
+    padding: 12px 14px;
 }}
 #homeEmptyHint {{
     background: transparent;
     border: none;
-    border-left: 2px solid {c['warn']};
+    border-left: 3px solid {c['warn']};
     border-radius: 0;
     padding: 4px 0 4px 10px;
     color: {c['text_dim']};
@@ -684,7 +736,7 @@ QLabel[feedbackKind="error"] {{ color: {c['danger']}; border-color: {c['danger']
     background: transparent;
 }}
 QDialogButtonBox QPushButton {{
-    min-width: 72px;
+    min-width: 76px;
 }}
 """
 
@@ -882,7 +934,7 @@ def setup_code_editor(widget) -> None:
 
 
 def build_logo_header(parent_layout, icon_path: str | None = None) -> None:
-    """侧边栏品牌区 — 扁平一行：图标 + 名，署名收成 tip."""
+    """侧边栏品牌区 — 图标 + 名称一行，不搞徽章堆砌."""
     from PyQt6.QtCore import Qt
     from PyQt6.QtGui import QPixmap
     from PyQt6.QtWidgets import QFrame, QHBoxLayout, QVBoxLayout, QLabel
@@ -974,6 +1026,24 @@ def style_sidebar_aux_button(btn) -> None:
     """侧栏次要操作 — 小字、浅色，不抢主按钮视觉."""
     btn.setProperty("sidebarAux", True)
     _repolish(btn)
+
+
+def apply_soft_shadow(
+    widget: QWidget,
+    *,
+    blur: int = 14,
+    x: int = 0,
+    y: int = 0,
+    alpha: int = 45,
+) -> None:
+    """轻阴影（参考 TrafficEye），透明度低，避免糊成卡片墙."""
+    from PyQt6.QtWidgets import QGraphicsDropShadowEffect
+
+    effect = QGraphicsDropShadowEffect(widget)
+    effect.setBlurRadius(blur)
+    effect.setOffset(x, y)
+    effect.setColor(QColor(0, 0, 0, max(0, min(255, alpha))))
+    widget.setGraphicsEffect(effect)
 
 
 def setup_main_tabs(tab_widget) -> None:

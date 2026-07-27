@@ -59,7 +59,32 @@ def _notify_wininet() -> None:
     internet_set_option(0, internet_option_refresh, 0, 0)
 
 
-def set_proxy(host: str, port: int, *, keep_local_direct: bool = True) -> ProxySnapshot:
+# 抓包时直连，避免 AI / 常用网关被 mitm 劫持导致 API 失败
+DEFAULT_BYPASS_HOSTS = (
+    "<local>",
+    "localhost",
+    "127.0.0.1",
+    "api.deepseek.com",
+    "api.openai.com",
+    "*.openai.com",
+    "api.anthropic.com",
+    "*.anthropic.com",
+    "dashscope.aliyuncs.com",
+    "*.aliyuncs.com",
+    "open.bigmodel.cn",
+    "api.moonshot.cn",
+    "api.siliconflow.cn",
+    "generativelanguage.googleapis.com",
+)
+
+
+def set_proxy(
+    host: str,
+    port: int,
+    *,
+    keep_local_direct: bool = True,
+    extra_bypass: list[str] | None = None,
+) -> ProxySnapshot:
     """启用系统代理，返回变更前的快照以便恢复."""
     if not is_supported():
         raise RuntimeError("当前系统不支持一键系统代理，请手动将微信/系统代理设为 "
@@ -76,10 +101,13 @@ def set_proxy(host: str, port: int, *, keep_local_direct: bool = True) -> ProxyS
     server = f"{host}:{int(port)}"
     override = prev.override
     if keep_local_direct:
-        extras = ["<local>", "localhost", "127.0.0.1"]
+        extras = list(DEFAULT_BYPASS_HOSTS)
+        if extra_bypass:
+            extras.extend(extra_bypass)
         parts = [p.strip() for p in (override or "").split(";") if p.strip()]
         for e in extras:
-            if e not in parts:
+            e = (e or "").strip()
+            if e and e not in parts:
                 parts.append(e)
         override = ";".join(parts)
     winreg.SetValueEx(key, "ProxyEnable", 0, winreg.REG_DWORD, 1)

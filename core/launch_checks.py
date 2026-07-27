@@ -190,7 +190,7 @@ def diagnose_proxy_line(line: str) -> str | None:
         if "burp" in low or "8083" in text or "proxy" in low:
             return (
                 "转发到 Burp 失败（连接被拒绝或代理不可达）。\n"
-                "请确认 Burp 已监听对应端口，且左侧「→ Burp」端口填写正确。"
+                "请确认 Burp 已监听对应端口，且左侧「Burp」端口填写正确。"
             )
 
     if "no module named" in low or "modulenotfounderror" in low:

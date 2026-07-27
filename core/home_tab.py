@@ -1,4 +1,4 @@
-"""密桥主页 — 状态概览与上手引导（扁平、少卡片）."""
+"""密桥主页 — 状态概览与上手引导（层级清晰、拓扑居中）."""
 
 from __future__ import annotations
 
@@ -20,8 +20,8 @@ class _StatCell(QWidget):
         super().__init__(parent)
         self.setObjectName("homeStatCard")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 10, 14, 10)
-        layout.setSpacing(3)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(4)
         self._label = QLabel(label)
         style_muted_label(self._label)
         self._value = QLabel("—")
@@ -65,8 +65,8 @@ class HomeTab(QWidget):
 
         body = QWidget()
         root = QVBoxLayout(body)
-        root.setContentsMargins(28, 22, 28, 28)
-        root.setSpacing(16)
+        root.setContentsMargins(32, 24, 32, 32)
+        root.setSpacing(18)
 
         root.addWidget(self._section("运行状态"))
         strip = QFrame()
@@ -90,12 +90,21 @@ class HomeTab(QWidget):
         root.addWidget(strip)
 
         root.addWidget(self._section("部署拓扑"))
+        topo_wrap = QHBoxLayout()
+        topo_wrap.setContentsMargins(0, 0, 0, 0)
+        topo_wrap.addStretch(1)
         self._topo_label = QLabel()
         self._topo_label.setObjectName("homeTopology")
-        self._topo_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self._topo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._topo_label.setMaximumWidth(1100)
+        self._topo_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
         self._topo_pixmap = QPixmap(TOPOLOGY_IMAGE)
         self._update_topology_image()
-        root.addWidget(self._topo_label)
+        topo_wrap.addWidget(self._topo_label, 8)
+        topo_wrap.addStretch(1)
+        root.addLayout(topo_wrap)
 
         root.addWidget(self._section("上手"))
         flow = QFrame()
@@ -122,14 +131,14 @@ class HomeTab(QWidget):
             style_muted_label(sd_lbl)
             fl.addWidget(badge, row, 0, Qt.AlignmentFlag.AlignTop)
             st_col = QVBoxLayout()
-            st_col.setSpacing(1)
+            st_col.setSpacing(2)
             st_col.addWidget(st_lbl)
             st_col.addWidget(sd_lbl)
             fl.addLayout(st_col, row, 1)
         root.addWidget(flow)
 
         btn_row = QHBoxLayout()
-        btn_row.setSpacing(8)
+        btn_row.setSpacing(10)
         btn_parser = QPushButton("解析报文")
         btn_parser.clicked.connect(lambda: self._go("parser"))
         style_button(btn_parser, "primary")
@@ -208,12 +217,13 @@ class HomeTab(QWidget):
     def _update_topology_image(self) -> None:
         if self._topo_pixmap.isNull():
             self._topo_label.setText(
-                "浏览器/APP → 解密端(:8080) → Burp(:8083) → 加密端(:8081) → 服务器"
+                "浏览器/APP → 解密端(:8083) → Burp(:8080) → 加密端(:8081) → 服务器"
             )
             return
-        w = max(420, self.width() - 80)
+        # 居中缩放：不超过容器宽度，也设上限避免超大屏拉得过大
+        avail = max(360, min(self.width() - 96, 1060))
         self._topo_label.setPixmap(
-            self._topo_pixmap.scaledToWidth(w, Qt.TransformationMode.SmoothTransformation)
+            self._topo_pixmap.scaledToWidth(avail, Qt.TransformationMode.SmoothTransformation)
         )
 
     def resizeEvent(self, event) -> None:
