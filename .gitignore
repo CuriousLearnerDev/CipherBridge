@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# 打包临时目录
+build/
+build/portable/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 本地配置与密钥（勿提交）
+config/ai.yaml
+.env
+.env.*
+
+# 用户生成的项目（保留 _template 模板与 plugin 基类）
+profiles/*.yaml
+!profiles/_template*.yaml
+profiles/*_proxy.pac
+
+plugins/*/
+!plugins/plugin.py
+!plugins/__init__.py
+
+# 项目导出包（可能含密钥/抓包数据）
+*.cbproj.zip
+
+# 小程序反编译 / 抓包工作区
+workspace/
+!workspace/.gitkeep
+
+# mitmproxy 证书
+.mitmproxy/
+
+# App 逆向绿色工具（体积大，本机自备）
+tools/apktool/*.jar
+tools/jadx-gui/*.exe
+tools/jadx-gui/jre/
+
+# 系统
+.DS_Store
+Thumbs.db
+desktop.ini
