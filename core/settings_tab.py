@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QApplication, QComboBox, QFormLayout, QLabel, QPushButton,
+    QApplication, QComboBox, QFormLayout, QGroupBox, QLabel, QPushButton,
     QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -12,7 +12,7 @@ from core.app_settings import get_theme, set_theme
 from core.brand import APP_REPO_URL
 from core.theme import (
     apply_theme, configure_combo_popup, refresh_widget_tree,
-    style_button, style_muted_label,
+    style_button, style_muted_label, setup_sub_tabs,
 )
 
 
@@ -26,15 +26,19 @@ class GeneralSettingsPage(QWidget):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
 
         hint = QLabel("界面与代理加载相关选项。保存后立即生效。")
         hint.setWordWrap(True)
         style_muted_label(hint)
         layout.addWidget(hint)
 
-        form = QFormLayout()
+        form_box = QGroupBox("外观与加载")
+        form = QFormLayout(form_box)
+        form.setContentsMargins(12, 14, 12, 12)
+        form.setSpacing(10)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
         self.theme_combo = QComboBox()
         self.theme_combo.addItem("浅色（白色）", "light")
         self.theme_combo.addItem("深色", "dark")
@@ -59,20 +63,26 @@ class GeneralSettingsPage(QWidget):
             if idx >= 0:
                 self.mode_combo.setCurrentIndex(idx)
         form.addRow("加载方式:", self.mode_combo)
-        layout.addLayout(form)
+        layout.addWidget(form_box)
 
+        cert_box = QGroupBox("HTTPS 证书")
+        cert_l = QVBoxLayout(cert_box)
+        cert_l.setContentsMargins(12, 14, 12, 12)
+        cert_l.setSpacing(8)
         cert_hint = QLabel(
-            "HTTPS 抓包需安装 mitmproxy 根证书。\n"
+            "HTTPS 抓包需安装 mitmproxy 根证书。"
             "证书状态仍在左侧解密端区域显示；启动解密时也会自动检查。"
         )
         cert_hint.setWordWrap(True)
-        layout.addWidget(cert_hint)
+        style_muted_label(cert_hint)
+        cert_l.addWidget(cert_hint)
 
         self.cert_btn = QPushButton("安装 HTTPS 证书")
         self.cert_btn.setToolTip("Windows 一键自动安装；macOS/Linux 打开证书文件")
         self.cert_btn.clicked.connect(self._install_cert)
-        style_button(self.cert_btn, "accent")
-        layout.addWidget(self.cert_btn)
+        style_button(self.cert_btn, "default")
+        cert_l.addWidget(self.cert_btn)
+        layout.addWidget(cert_box)
 
         repo_label = QLabel(
             f'项目地址: <a href="{APP_REPO_URL}">{APP_REPO_URL}</a>'
@@ -146,10 +156,11 @@ class SettingsHubTab(QWidget):
         self.log_tab = log_tab
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
         self.inner_tabs = QTabWidget()
+        setup_sub_tabs(self.inner_tabs)
         self.general_page = GeneralSettingsPage(control)
         self.inner_tabs.addTab(self.general_page, "通用")
         self.inner_tabs.addTab(crypto_tab, "加解密测试")

@@ -21,8 +21,15 @@ ALGO_SDK = {
     "3DES": ("tripledes", "tripledes"),
     "SM4": ("sm4", "sm4"),
     "RSA": ("rsa", "rsa"),
+    "SM2": ("sm2", "sm2"),
     "XOR": ("xor", "xor"),
 }
+
+# 非对称：codegen 不传对称的 mode/iv；mode 框可填填充/密文格式
+_ASYMMETRIC_ALGOS = frozenset({"RSA", "SM2"})
+_RSA_PADS = frozenset({"OAEP", "PKCS1v15", "PKCS1", "PKCS1_v1_5"})
+_SM2_MODES = frozenset({"C1C3C2", "C1C2C3"})
+
 
 _ALGO_REVERSE = {v[1]: k for k, v in ALGO_SDK.items()}
 
@@ -85,23 +92,65 @@ def normalize_step_params(step: dict) -> dict:
 
     if op == "🔤 编码转换":
         p["encode_type"] = _resolve_encode_type(p)
-        p.setdefault("field", "data")
+        if not str(p.get("field") or "").strip():
+            p["field"] = "data"
     elif op in ("🔓 解密字段", "🔒 加密字段"):
-        p.setdefault("field", "data")
+        if not str(p.get("field") or "").strip():
+            p["field"] = "data"
         p.setdefault("algo", "AES")
         p.setdefault("mode", "ECB")
         p.setdefault("padding", "PKCS7")
         p.setdefault("key", "")
     elif op in ("🔓 解密响应字段", "🔒 加密响应字段"):
-        p.setdefault("field", "data")
+        if not str(p.get("field") or "").strip():
+            p["field"] = "data"
         p.setdefault("algo", "AES")
         p.setdefault("mode", "ECB")
         p.setdefault("padding", "PKCS7")
         p.setdefault("key", "")
-    elif op == "📝 签名(Hash)":
+    elif op in ("📝 签名(Hash)", "📝 生成签名"):
         p.setdefault("algo", "SHA256")
         p.setdefault("output", "hex")
         p.setdefault("target_type", "Header")
+        # AI 常漏写写入位置；兼容别名
+        if not str(p.get("target") or "").strip():
+            p["target"] = (
+                p.get("header")
+                or p.get("header_name")
+                or p.get("output_field")
+                or p.get("name")
+                or p.get("field")
+                or "sign"
+            )
+        if not str(p.get("source") or "").strip():
+            p["source"] = p.get("source_field") or ""
+    elif op == "📝 签名(HMAC带密钥)":
+        p.setdefault("algo", "HMAC-SHA256")
+        p.setdefault("output", "hex")
+        p.setdefault("target_type", "Header")
+        p.setdefault("hmac_key", p.get("key") or "")
+        if not str(p.get("target") or "").strip():
+            p["target"] = (
+                p.get("header")
+                or p.get("header_name")
+                or p.get("output_field")
+                or p.get("name")
+                or "sign"
+            )
+        if not str(p.get("source") or "").strip():
+            p["source"] = p.get("source_field") or "data"
+    elif op == "📝 签名(排序拼接)":
+        p.setdefault("algo", "MD5")
+        p.setdefault("target_type", "Header")
+        p.setdefault("separator", "|")
+        if not str(p.get("target") or "").strip():
+            p["target"] = (
+                p.get("header")
+                or p.get("header_name")
+                or p.get("output_field")
+                or p.get("name")
+                or "sign"
+            )
     return {"type": op, "params": p}
 
 
@@ -256,6 +305,11 @@ def _crypto_op_scoped(
     fn: str, field: str, key: str, mode: str, padding: str, scope: str, iv: str = "",
     input_fmt: str = "base64", output: str = "base64",
 ) -> str:
+    # 非对称：RSA/SM2 签名与对称 API 不同
+    if fn.startswith("rsa_") or fn.startswith("sm2_"):
+        return _asymmetric_op_scoped(
+            fn, field, key, mode, padding, scope, input_fmt=input_fmt, output=output,
+        )
     iv_val = _iv_expr(iv, scope)
     if iv_val == "#prefix" and fn == "aes_decrypt":
         inner = (
@@ -273,6 +327,33 @@ def _crypto_op_scoped(
         f'{fn}({_field_get_scoped(field, scope)}, {_key_expr(key)}, '
         f'mode="{mode}", padding="{padding}"{iv_kw}{fmt_kw})'
     )
+    return _field_set_scoped(field, inner, scope)
+
+
+def _asymmetric_op_scoped(
+    fn: str, field: str, key: str, mode: str, padding: str, scope: str,
+    input_fmt: str = "base64", output: str = "base64",
+) -> str:
+    """RSA / SM2 调用生成."""
+    data_expr = _field_get_scoped(field, scope)
+    key_expr = _key_expr(key)
+    if fn.startswith("rsa_"):
+        pad = padding if padding in _RSA_PADS else (mode if mode in _RSA_PADS else "OAEP")
+        if pad in ("PKCS1", "PKCS1_v1_5"):
+            pad = "PKCS1v15"
+        if fn.endswith("_decrypt") and input_fmt != "base64":
+            inner = f'{fn}({data_expr}, {key_expr}, padding="{pad}", input_fmt="{input_fmt}")'
+        else:
+            inner = f'{fn}({data_expr}, {key_expr}, padding="{pad}")'
+    else:
+        # SM2: mode = C1C3C2 / C1C2C3
+        sm_mode = mode if mode in _SM2_MODES else "C1C3C2"
+        if fn.endswith("_decrypt"):
+            fmt = f', input_fmt="{input_fmt}"' if input_fmt != "base64" else ""
+            inner = f'{fn}({data_expr}, {key_expr}, mode="{sm_mode}"{fmt})'
+        else:
+            out = f', output="{output}"' if output != "base64" else ""
+            inner = f'{fn}({data_expr}, {key_expr}, mode="{sm_mode}"{out})'
     return _field_set_scoped(field, inner, scope)
 
 
@@ -367,6 +448,10 @@ def _crypto_op_response(
     fn: str, field: str, key: str, mode: str, padding: str, iv: str = "",
     input_fmt: str = "base64", output: str = "base64",
 ) -> str:
+    if fn.startswith("rsa_") or fn.startswith("sm2_"):
+        return _asymmetric_op_response(
+            fn, field, key, mode, padding, input_fmt=input_fmt, output=output,
+        )
     iv_val = _iv_expr_resp(iv)
     if iv_val == "#prefix" and "decrypt" in fn:
         inner = (
@@ -386,16 +471,42 @@ def _crypto_op_response(
     return _resp_field_set(field, inner)
 
 
+def _asymmetric_op_response(
+    fn: str, field: str, key: str, mode: str, padding: str,
+    input_fmt: str = "base64", output: str = "base64",
+) -> str:
+    data_expr = _resp_field_get(field)
+    key_expr = _key_expr_flow(key)
+    if fn.startswith("rsa_"):
+        pad = padding if padding in _RSA_PADS else (mode if mode in _RSA_PADS else "OAEP")
+        if pad in ("PKCS1", "PKCS1_v1_5"):
+            pad = "PKCS1v15"
+        if fn.endswith("_decrypt") and input_fmt != "base64":
+            inner = f'{fn}({data_expr}, {key_expr}, padding="{pad}", input_fmt="{input_fmt}")'
+        else:
+            inner = f'{fn}({data_expr}, {key_expr}, padding="{pad}")'
+    else:
+        sm_mode = mode if mode in _SM2_MODES else "C1C3C2"
+        if fn.endswith("_decrypt"):
+            fmt = f', input_fmt="{input_fmt}"' if input_fmt != "base64" else ""
+            inner = f'{fn}({data_expr}, {key_expr}, mode="{sm_mode}"{fmt})'
+        else:
+            out = f', output="{output}"' if output != "base64" else ""
+            inner = f'{fn}({data_expr}, {key_expr}, mode="{sm_mode}"{out})'
+    return _resp_field_set(field, inner)
+
+
 def _key_expr(key_val: str) -> str:
     if key_val.startswith("$"):
         return f'ctx.get_key("{key_val[1:]}", "")'
-    return f'"{key_val}"'
+    # PEM / 多行密钥用 repr，避免换行打断字符串
+    return repr(key_val)
 
 
 def _key_expr_flow(key_val: str) -> str:
     if key_val.startswith("$"):
         return f'_SESSION.get("{key_val[1:]}", "")'
-    return f'"{key_val}"'
+    return repr(key_val)
 
 
 def _adapt_lines_for_flow(lines: list[str]) -> list[str]:
@@ -470,43 +581,30 @@ def _forward_headers(flow):
 
 
 def _burp_forward_block() -> str:
+    """兼容旧模板；解密端已改用 mitmdump upstream，新代码不再插入此块."""
     return '''\
-    proxies = {
-        "http": f"http://{BURP_PROXY[0]}:{BURP_PROXY[1]}",
-        "https": f"http://{BURP_PROXY[0]}:{BURP_PROXY[1]}",
-    }
-    try:
-        burp_resp = requests.request(
-            method=flow.request.method,
-            url=flow.request.url,
-            headers=_forward_headers(flow),
-            data=flow.request.content,
-            allow_redirects=False,
-            proxies=proxies,
-            timeout=30,
-            verify=False,
-        )
-        flow.response = http.Response.make(
-            burp_resp.status_code,
-            burp_resp.content,
-            dict(burp_resp.headers),
-        )
-    except Exception as e:
-        print(f"转发到Burp失败: {e}")
-        import traceback; traceback.print_exc()
+    # [已弃用] 请勿在解密插件里用 requests 转发 Burp。
+    # 启动参数已含 --mode upstream:http://127.0.0.1:BURP_PORT
 '''
 
 
 def _server_forward_block() -> str:
     return '''\
+    # 加密端：直连目标（不经 Burp）
     try:
-        server_resp = requests.request(
+        global _CB_HTTP
+        try:
+            _CB_HTTP
+        except NameError:
+            _CB_HTTP = requests.Session()
+            _CB_HTTP.trust_env = False
+        server_resp = _CB_HTTP.request(
             method=flow.request.method,
             url=flow.request.url,
             headers=_forward_headers(flow),
             data=flow.request.content,
             allow_redirects=False,
-            timeout=30,
+            timeout=(5, 60),
             verify=False,
         )
         flow.response = http.Response.make(
@@ -514,9 +612,21 @@ def _server_forward_block() -> str:
             server_resp.content,
             dict(server_resp.headers),
         )
+    except requests.exceptions.Timeout as e:
+        print(f"转发到服务器超时: {e}")
+        flow.response = http.Response.make(
+            504,
+            b"Gateway Timeout",
+            {"Content-Type": "text/plain; charset=utf-8"},
+        )
     except Exception as e:
         print(f"转发到服务器失败: {e}")
         import traceback; traceback.print_exc()
+        flow.response = http.Response.make(
+            502,
+            f"Bad Gateway: {e}".encode("utf-8", errors="replace"),
+            {"Content-Type": "text/plain; charset=utf-8"},
+        )
 '''
 
 
@@ -663,9 +773,10 @@ def generate_code_from_steps(
             if scope != "query":
                 imports.add("from sdk.helpers.jsonpath import json_get, json_set")
             fn = _sdk_fn(p["algo"], "encrypt")
+            field = _step_field(p)
             request_lines.append(
                 "    " + _crypto_op_scoped(
-                    fn, p["field"], p["key"], p["mode"], p["padding"], scope, p.get("iv", ""),
+                    fn, field, p["key"], p["mode"], p["padding"], scope, p.get("iv", ""),
                     output=p.get("output", "base64"),
                 ) + comment
             )
@@ -675,11 +786,12 @@ def generate_code_from_steps(
             if scope != "query":
                 imports.add("from sdk.helpers.jsonpath import json_get, json_set")
             fn = _sdk_fn(p["algo"], "decrypt")
+            field = _step_field(p)
             if p.get("iv") == "#prefix" and p.get("algo") == "AES":
                 imports.add("from sdk.crypto.aes import aes_decrypt_iv_prefix")
             request_lines.append(
                 "    " + _crypto_op_scoped(
-                    fn, p["field"], p["key"], p["mode"], p["padding"], scope, p.get("iv", ""),
+                    fn, field, p["key"], p["mode"], p["padding"], scope, p.get("iv", ""),
                     input_fmt=p.get("input_fmt", "base64"),
                 ) + comment
             )
@@ -688,11 +800,12 @@ def generate_code_from_steps(
             imports.add(_sdk_import(p["algo"], "decrypt"))
             imports.add("from sdk.helpers.jsonpath import json_get, json_set")
             fn = _sdk_fn(p["algo"], "decrypt")
+            field = _step_field(p)
             if p.get("iv") == "#prefix" and p.get("algo") == "AES":
                 imports.add("from sdk.crypto.aes import aes_decrypt_iv_prefix")
             response_lines.append(
                 "    " + _crypto_op_response(
-                    fn, p["field"], p["key"], p["mode"], p["padding"], p.get("iv", ""),
+                    fn, field, p["key"], p["mode"], p["padding"], p.get("iv", ""),
                     input_fmt=p.get("input_fmt", "base64"),
                 ) + comment
             )
@@ -702,50 +815,55 @@ def generate_code_from_steps(
             imports.add(_sdk_import(p["algo"], "encrypt"))
             imports.add("from sdk.helpers.jsonpath import json_get, json_set")
             fn = _sdk_fn(p["algo"], "encrypt")
+            field = _step_field(p)
             response_lines.append(
                 "    " + _crypto_op_response(
-                    fn, p["field"], p["key"], p["mode"], p["padding"], p.get("iv", ""),
+                    fn, field, p["key"], p["mode"], p["padding"], p.get("iv", ""),
                     output=p.get("output", "base64"),
                 ) + comment
             )
             response_writes_body = True
 
         elif op in ("📝 签名(Hash)", "📝 生成签名"):
-            if p["algo"] == "SM3":
+            if p.get("algo") == "SM3":
                 imports.add("from sdk.sign.sm3 import sm3")
                 fn = "sm3"
             else:
-                imports.add(f"from sdk.sign.sha import {p['algo'].lower()}")
-                fn = p["algo"].lower()
+                algo = (p.get("algo") or "SHA256").lower()
+                imports.add(f"from sdk.sign.sha import {algo}")
+                fn = algo
             src_scope = _normalize_scope(p.get("source_scope", p.get("scope", "body")))
             src = _field_get_scoped(p["source"], src_scope) if p.get("source") else "json.dumps(data, ensure_ascii=False)"
             sig_call = f"{fn}({src})"
             if p.get("output") == "base64":
                 imports.add("import base64")
                 sig_call = f"base64.b64encode(bytes.fromhex({fn}({src}))).decode()"
-            if p["target_type"] == "Header":
-                request_lines.append(f'    ctx.set_header("{p["target"]}", {sig_call}){comment}')
-            elif p["target_type"] == "URL参数字段":
-                request_lines.append(f'    query["{p["target"]}"] = {sig_call}{comment}')
+            target = str(p.get("target") or "sign").strip() or "sign"
+            target_type = p.get("target_type") or "Header"
+            if target_type == "Header":
+                request_lines.append(f'    ctx.set_header("{target}", {sig_call}){comment}')
+            elif target_type == "URL参数字段":
+                request_lines.append(f'    query["{target}"] = {sig_call}{comment}')
             else:
                 tgt_scope = _normalize_scope(p.get("target_scope", src_scope))
-                request_lines.append("    " + _field_set_scoped(p["target"], sig_call, tgt_scope) + comment)
+                request_lines.append("    " + _field_set_scoped(target, sig_call, tgt_scope) + comment)
 
         elif op == "📝 签名(HMAC带密钥)":
             algo_map = {"HMAC-SHA256": "sha256", "HMAC-SHA1": "sha1", "HMAC-MD5": "md5", "HMAC-SHA512": "sha512"}
-            hash_name = algo_map.get(p["algo"], "sha256")
+            hash_name = algo_map.get(p.get("algo") or "HMAC-SHA256", "sha256")
             imports.add("import hmac")
             imports.add("import hashlib")
             src = _field_get(p["source"]) if p.get("source") else 'data.get("data", "")'
-            hm_key_expr = _key_expr(p["hmac_key"])
+            hm_key_expr = _key_expr(p.get("hmac_key") or p.get("key") or "")
             sig_call = f'hmac.new({hm_key_expr}.encode(), str({src}).encode(), hashlib.{hash_name}).hexdigest()'
             if p.get("output") == "base64":
                 imports.add("import base64")
                 sig_call = f"base64.b64encode(hmac.new({hm_key_expr}.encode(), str({src}).encode(), hashlib.{hash_name}).digest()).decode()"
-            if p["target_type"] == "Header":
-                request_lines.append(f'    ctx.set_header("{p["target"]}", {sig_call}){comment}')
+            target = str(p.get("target") or "sign").strip() or "sign"
+            if (p.get("target_type") or "Header") == "Header":
+                request_lines.append(f'    ctx.set_header("{target}", {sig_call}){comment}')
             else:
-                request_lines.append(f'    {_field_set(p["target"], sig_call)}{comment}')
+                request_lines.append(f'    {_field_set(target, sig_call)}{comment}')
 
         elif op == "📝 签名(排序拼接)":
             sep = p.get("separator", "|")
@@ -959,12 +1077,17 @@ def generate_code_from_steps(
     flow_response_lines = _adapt_response_lines_for_flow(response_lines)
 
     code = f'"""Auto-generated plugin — 由 {APP_TITLE} 生成."""\n'
-    code += "import sys, os, json, requests, urllib.parse\n"
+    if role == "encrypt":
+        code += "import sys, os, json, requests, urllib.parse\n"
+    else:
+        code += "import sys, os, json, urllib.parse\n"
     code += 'sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))\n'
     code += "from mitmproxy import http\n"
     if role == "decrypt":
-        code += '\nBURP_PORT = os.environ.get("BURP_PORT", "8080")\n'
-        code += "BURP_PROXY = (\"127.0.0.1\", int(BURP_PORT))\n"
+        code += (
+            "\n# 浏览器 → 解密端 → (mitmdump upstream) Burp → 服务器\n"
+            "# 本插件只改字段；勿用 requests 转发 Burp（易 Timeout）\n"
+        )
     for imp in sorted(imports):
         code += imp + "\n"
     code += "\n"
@@ -984,45 +1107,65 @@ def generate_code_from_steps(
             methods.extend(["POST", "PUT", "PATCH"])
         if not methods:
             methods = ["POST", "PUT", "PATCH", "GET"]
+        methods_tup = tuple(methods)
         code += "def request(flow: http.HTTPFlow) -> None:\n"
-        if match_guard:
-            code += "    if not _should_process(flow):\n"
+        # 解密端：只改匹配请求，流量由 --mode upstream 进 Burp
+        # 加密端：匹配后改写并用 requests 直连目标
+        if role == "encrypt":
+            if match_guard:
+                code += "    if not _should_process(flow):\n"
+                code += "        return\n"
+            code += f"    if flow.request.method not in {methods_tup}:\n"
             code += "        return\n"
-        code += f"    if flow.request.method not in {tuple(methods)}:\n"
-        code += "        return\n"
-        code += "    try:\n"
+            code += "    try:\n"
+        else:
+            code += f"    if flow.request.method not in {methods_tup}:\n"
+            code += "        return\n"
+            if match_guard:
+                code += "    if not _should_process(flow):\n"
+                code += "        return\n"
+            code += "    try:\n"
+        indent = "        "
         if uses_body:
             if body_fmt == "form":
-                code += "        data = dict(urllib.parse.parse_qsl(flow.request.text or \"\"))\n"
+                code += f"{indent}data = dict(urllib.parse.parse_qsl(flow.request.text or \"\"))\n"
             else:
-                code += "        data = json.loads(flow.request.content or b\"{}\")\n"
+                code += f"{indent}data = json.loads(flow.request.content or b\"{{}}\")\n"
         if uses_query:
-            code += "        _parsed = urllib.parse.urlparse(flow.request.url)\n"
-            code += "        query = dict(urllib.parse.parse_qsl(_parsed.query, keep_blank_values=True))\n"
+            code += f"{indent}_parsed = urllib.parse.urlparse(flow.request.url)\n"
+            code += f"{indent}query = dict(urllib.parse.parse_qsl(_parsed.query, keep_blank_values=True))\n"
         for line in flow_request_lines:
-            code += "    " + line + "\n"
+            # flow_request_lines 已含一级缩进(4空格)；再套一层
+            stripped = line[4:] if line.startswith("    ") else line
+            code += indent + stripped + "\n"
         if uses_body:
             if body_fmt == "form":
-                code += "        _write_form_body(flow, data)\n"
+                code += f"{indent}_write_form_body(flow, data)\n"
             else:
-                code += "        _write_json_body(flow, data)\n"
+                code += f"{indent}_write_json_body(flow, data)\n"
         if uses_query:
-            code += "        _parsed = urllib.parse.urlparse(flow.request.url)\n"
-            code += "        new_q = urllib.parse.urlencode(query, doseq=True)\n"
-            code += "        flow.request.url = urllib.parse.urlunparse((_parsed.scheme, _parsed.netloc, _parsed.path, _parsed.params, new_q, _parsed.fragment))\n"
+            code += f"{indent}_parsed = urllib.parse.urlparse(flow.request.url)\n"
+            code += f"{indent}new_q = urllib.parse.urlencode(query, doseq=True)\n"
+            code += (
+                f"{indent}flow.request.url = urllib.parse.urlunparse("
+                f"(_parsed.scheme, _parsed.netloc, _parsed.path, "
+                f"_parsed.params, new_q, _parsed.fragment))\n"
+            )
         code += "    except Exception as e:\n"
         code += '        print(f"请求处理错误: {e}")\n'
         code += "        import traceback; traceback.print_exc()\n"
         code += "\n"
         if role == "encrypt":
             code += _server_forward_block()
-        else:
-            code += _burp_forward_block()
-        code += "\n"
+            code += "\n"
     else:
         code += "def request(flow: http.HTTPFlow) -> None:\n"
-        code += "    # 暂无请求步骤：在解析器/构建器添加后保存即可\n"
-        code += "    return\n\n"
+        if role == "decrypt":
+            code += "    # 暂无请求加解密步骤：流量仍由 upstream 进入 Burp\n"
+            code += "    return\n\n"
+        else:
+            code += "    # 暂无请求步骤：在解析器/构建器添加后保存即可\n"
+            code += "    return\n\n"
 
     if response_lines:
         code += "def response(flow: http.HTTPFlow) -> None:\n"

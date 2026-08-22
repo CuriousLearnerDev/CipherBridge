@@ -1,11 +1,17 @@
-"""GUI 图标加载 — 从 img/icons/ 加载 PNG/SVG，程序图标 img/main.jpg."""
+"""GUI 图标加载 — 从 img/icons/ 加载 PNG/SVG，程序图标 img/main.jpg.
+
+规则：
+- 逻辑名优先找同名文件；没有再用别名
+- 有 SVG 时优先用 SVG 并按主题着色；统领替换的图标已去掉 SVG，走彩色 PNG
+- 仅 PNG 时：彩色图标保持原色，深色单色图标按主题字色提亮
+"""
 
 from __future__ import annotations
 
 import os
 import re
-from PyQt6.QtCore import Qt, QSize, QSize
-from PyQt6.QtGui import QIcon, QPixmap, QPainter
+from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QImage
 
 try:
     from PyQt6.QtSvg import QSvgRenderer
@@ -21,6 +27,23 @@ IMG_DIR = os.path.join(ROOT, "img")
 ICON_DIR = os.path.join(IMG_DIR, "icons")
 MAIN_ICON = os.path.join(IMG_DIR, "main.jpg")
 TOPOLOGY_IMAGE = os.path.join(IMG_DIR, "e2f83ef5-edda-4dbf-a8f0-cf24bbc920aa.png")
+
+# 仅：逻辑名没有同名文件时兜底（严格按文件名语义）
+ICON_ALIASES: dict[str, str] = {
+    "folder": "open",
+    "settings": "setting",
+    "logs": "log",
+    "analyze": "analyzer",
+    "warn": "warning",
+    "help": "info",
+    "run": "play",
+    "import": "open",
+    # 解析器旧名
+    "upload": "parser",
+}
+
+# 彩色 PNG 优先（自定义解析器/构建器/浏览器图标，不走 SVG 主题染色）
+_COLOR_PNG_FIRST = frozenset({"parser", "builder", "browser"})
 
 _VARIANT_TINT = {
     "primary": C["text"],
@@ -67,9 +90,47 @@ def _render_svg(svg_path: str, size: int, tint: str | None = None) -> QIcon:
     pixmap.fill(Qt.GlobalColor.transparent)
     if renderer.isValid():
         painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         renderer.render(painter)
         painter.end()
     return QIcon(pixmap)
+
+
+def _tint_png(png_path: str, size: int, tint: str) -> QIcon:
+    """PNG 重着色：透明底深色图标 → 主题色；彩色图标保持原色."""
+    src = QPixmap(png_path)
+    if src.isNull():
+        return QIcon()
+    src = src.scaled(
+        QSize(size, size),
+        Qt.AspectRatioMode.KeepAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
+    )
+    img = src.toImage().convertToFormat(QImage.Format.Format_ARGB32)
+    dark_ink = 0
+    opaque = 0
+    for y in range(img.height()):
+        for x in range(img.width()):
+            p = img.pixelColor(x, y)
+            if p.alpha() < 16:
+                continue
+            opaque += 1
+            if (p.red() + p.green() + p.blue()) / 3 < 80:
+                dark_ink += 1
+    # 彩色图标（红停、蓝清等）不染色
+    if opaque > 0 and dark_ink / opaque < 0.55:
+        return QIcon(src)
+
+    tinted = QPixmap(src.size())
+    tinted.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(tinted)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+    painter.drawPixmap(0, 0, src)
+    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+    painter.fillRect(tinted.rect(), QColor(tint))
+    painter.end()
+    return QIcon(tinted)
 
 
 def _resolve_tint(tint: str | None = None, light: bool = False, variant: str = "") -> str:
@@ -79,25 +140,47 @@ def _resolve_tint(tint: str | None = None, light: bool = False, variant: str = "
         return _VARIANT_TINT[variant]
     if light:
         return C["text"]
-    return C["text"]
+    return C.get("text", "#e8eaed")
+
+
+def _candidate_basenames(name: str) -> list[str]:
+    """同名优先，再跟别名链（避免互指死循环）."""
+    names: list[str] = []
+    seen: set[str] = set()
+    queue = [name]
+    while queue:
+        cur = queue.pop(0)
+        if cur in seen:
+            continue
+        seen.add(cur)
+        names.append(cur)
+        alias = ICON_ALIASES.get(cur)
+        if alias and alias not in seen:
+            queue.append(alias)
+    return names
 
 
 def icon(name: str, size: int = 20, light: bool = False, tint: str | None = None) -> QIcon:
-    """按名称获取图标，优先 PNG，其次 SVG."""
+    """按逻辑名加载：优先同名 SVG（主题着色），其次 PNG（深色自动提亮）."""
     color = _resolve_tint(tint, light=light)
     key = (name, size, color)
     if key in _cache:
         return _cache[key]
 
-    png = os.path.join(ICON_DIR, f"{name}.png")
-    svg = os.path.join(ICON_DIR, f"{name}.svg")
-
-    if os.path.isfile(png):
-        ic = QIcon(png)
-    elif os.path.isfile(svg) and _HAS_SVG:
-        ic = _render_svg(svg, size, tint=color)
-    else:
-        ic = QIcon()
+    ic = QIcon()
+    for base in _candidate_basenames(name):
+        png = os.path.join(ICON_DIR, f"{base}.png")
+        svg = os.path.join(ICON_DIR, f"{base}.svg")
+        # 彩色自定义图标：PNG 优先，避免被 SVG 主题色覆盖
+        if base in _COLOR_PNG_FIRST and os.path.isfile(png):
+            ic = _tint_png(png, size, color)
+            break
+        if os.path.isfile(svg) and _HAS_SVG:
+            ic = _render_svg(svg, size, tint=color)
+            break
+        if os.path.isfile(png):
+            ic = _tint_png(png, size, color)
+            break
 
     _cache[key] = ic
     return ic
@@ -110,8 +193,8 @@ def app_icon() -> QIcon:
     return QIcon()
 
 
-def set_btn_icon(btn, name: str, size: int = 16, light: bool = False, tint: str | None = None):
-    """为按钮设置图标（主要操作按钮）."""
+def set_btn_icon(btn, name: str, size: int = 18, light: bool = False, tint: str | None = None):
+    """为按钮设置图标（默认 18px，比原先更易辨认）."""
     if tint is None:
         variant = btn.property("variant") or ""
         if variant == "primary":

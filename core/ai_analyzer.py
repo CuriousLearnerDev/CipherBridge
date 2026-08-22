@@ -19,6 +19,88 @@ BUILTIN_STEP_TYPES = [
     "🔑 定义密钥(固定值)", "🔑 提取密钥(从响应)", "🔑 派生密钥(计算)",
 ]
 
+# 哈希 / HMAC / 排序签名 — 不可从结果还原明文
+_IRREVERSIBLE_STEP_TYPES = {
+    "📝 签名(Hash)",
+    "📝 生成签名",
+    "📝 签名(HMAC带密钥)",
+    "📝 签名(排序拼接)",
+}
+_REVERSIBLE_CRYPTO_TYPES = {
+    "🔓 解密字段",
+    "🔓 解密响应字段",
+    "🔒 加密字段",
+    "🔒 加密响应字段",
+    "🔐 AuthToken生成",
+}
+_HASH_ALGO_MARKERS = (
+    "MD5", "SHA1", "SHA256", "SHA512", "SHA3", "SM3", "HMAC", "HASH",
+)
+
+
+def classify_steps_reversibility(steps: list | None) -> dict:
+    """区分可逆加解密 vs 哈希/签名等不可逆步骤。"""
+    irreversible: list[str] = []
+    reversible: list[str] = []
+    other: list[str] = []
+    for step in steps or []:
+        if not isinstance(step, dict):
+            continue
+        stype = str(step.get("type") or "").strip()
+        params = step.get("params") if isinstance(step.get("params"), dict) else {}
+        algo = str(params.get("algo") or params.get("algorithm") or "").upper()
+        label = stype
+        if algo:
+            label = f"{stype} ({algo})"
+
+        if stype in _IRREVERSIBLE_STEP_TYPES or "签名" in stype:
+            irreversible.append(label)
+            continue
+        if stype in _REVERSIBLE_CRYPTO_TYPES:
+            # 误把哈希写进「解密/加密字段」
+            if any(m in algo for m in _HASH_ALGO_MARKERS) and not any(
+                x in algo for x in ("AES", "DES", "SM4", "RSA", "XOR", "RC4")
+            ):
+                irreversible.append(label + " · 哈希不可逆")
+            else:
+                reversible.append(label)
+            continue
+        other.append(label)
+
+    return {
+        "irreversible": irreversible,
+        "reversible": reversible,
+        "other": other,
+        "hash_only": bool(irreversible) and not reversible,
+        "has_irreversible": bool(irreversible),
+        "has_reversible": bool(reversible),
+    }
+
+
+def format_irreversible_decrypt_warning(info: dict) -> str | None:
+    """生成解密场景下的不可逆提示文案；无需提示时返回 None。"""
+    if not info.get("has_irreversible"):
+        return None
+    names = "、".join(info["irreversible"][:6])
+    if len(info["irreversible"]) > 6:
+        names += "…"
+    if info.get("hash_only"):
+        return (
+            "当前识别到的主要是哈希 / 签名类步骤（不可逆），例如：\n"
+            f"  {names}\n\n"
+            "MD5、SHA、HMAC 等无法「解密」还原。\n\n"
+            "推荐：写油猴 Hook「绕过加密」，让选定字段以明文发给 Burp；"
+            "你在 Burp 改完后，再用「生成加密」在加密端重算哈希/签名出站。\n\n"
+            "仍要按当前步骤写入解密项目吗？"
+        )
+    return (
+        "步骤中包含哈希 / 签名（不可逆），例如：\n"
+        f"  {names}\n\n"
+        "也可 Hook 绕过，让字段明文进 Burp，再「生成加密」重算出站。\n\n"
+        "仍要写入当前选中的步骤吗？"
+    )
+
+
 SYSTEM_PROMPT_DECRYPT = """你是 JavaScript 逆向与 HTTP 加解密分析专家。
 根据 Hook 日志、HTTP 请求/响应，推断**解密端**代理流程：浏览器密文 → 解密 → 转发 Burp 明文。
 
@@ -26,6 +108,9 @@ SYSTEM_PROMPT_DECRYPT = """你是 JavaScript 逆向与 HTTP 加解密分析专�
 {
   "summary": "简短中文分析",
   "confidence": "high|medium|low",
+  "code_locations": [
+    {"url": "https://example.com/app.js", "approx_line": 1284, "offset": 45678, "what": "CryptoJS.AES.encrypt", "snippet": "CryptoJS.AES.encrypt(...)"}
+  ],
   "steps": [
     {"type": "🔓 解密字段", "params": {"field": "data", "algo": "AES", "mode": "ECB", "key": "...", "padding": "PKCS7", "scope": "📋 Body (JSON)"}},
     {"type": "🔓 解密响应字段", "params": {"field": "result.data", "algo": "AES", "mode": "ECB", "key": "...", "padding": "PKCS7"}}
@@ -47,6 +132,7 @@ SYSTEM_PROMPT_DECRYPT = """你是 JavaScript 逆向与 HTTP 加解密分析专�
 12. **禁止**在 🔓 解密字段 / 🔒 加密字段 前后添加 Base64/Hex 编解码：AES/DES/SM4/RSA 等 SDK 已内置 input_fmt/output（默认 Base64），密文字段直接写加解密步骤即可
 13. 🔤 编码转换仅用于明文层编码（如 Base64 包 JSON 字符串），不用于 AES 密文
 14. JS 若带 miniprogram:// 前缀，为微信小程序反编译源码；常见 CryptoJS / encrypt / wx.request，优先从中找密钥与字段
+15. **code_locations** 记录加解密相关源码位置（url / approx_line / what / snippet），仅供人工找代码；与 steps 无关，不参与 plugin 生成；有 JS 依据时尽量填写
 """
 
 SYSTEM_PROMPT_ENCRYPT = """你是 JavaScript 逆向与 HTTP 加解密分析专家。
@@ -58,6 +144,9 @@ SYSTEM_PROMPT_ENCRYPT = """你是 JavaScript 逆向与 HTTP 加解密分析专�
 {
   "summary": "简短中文分析",
   "confidence": "high|medium|low",
+  "code_locations": [
+    {"url": "https://example.com/app.js", "approx_line": 200, "offset": 8000, "what": "encrypt / sign", "snippet": "..."}
+  ],
   "steps": [
     {"type": "🔒 加密字段", "params": {"field": "password", "algo": "AES", "mode": "ECB", "key": "...", "padding": "PKCS7", "scope": "📋 Body (Form)"}},
     {"type": "🔒 加密响应字段", "params": {"field": "result.data", "algo": "AES", "mode": "ECB", "key": "...", "padding": "PKCS7"}},
@@ -77,6 +166,7 @@ SYSTEM_PROMPT_ENCRYPT = """你是 JavaScript 逆向与 HTTP 加解密分析专�
 9. **禁止**在 🔒 加密字段 / 🔓 解密字段 前后添加 Base64/Hex 编解码：加解密 SDK 已内置 Base64/Hex 处理，密文字段只需一步加解密
 10. 🔤 编码转换仅用于明文层，不用于 AES 等密文
 11. JS 若带 miniprogram:// 前缀，为微信小程序反编译源码；常见 CryptoJS / encrypt / wx.request，优先从中找密钥与字段
+12. **code_locations** 记录加解密相关源码位置，仅供人工找代码；与 steps/plugin 无关
 """
 
 
@@ -243,7 +333,57 @@ def _sanitize_key(val) -> str:
     return s
 
 
+def _normalize_code_locations(result: dict) -> dict:
+    """规范化 code_locations；与 steps 无关，不参与 plugin 生成。"""
+    raw = result.get("code_locations")
+    if raw is None:
+        # 兼容个别模型写成 locations / source_locations
+        raw = result.get("locations") or result.get("source_locations")
+    if not isinstance(raw, list):
+        result.pop("code_locations", None)
+        return result
+    cleaned: list[dict] = []
+    for item in raw[:20]:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or item.get("script") or item.get("file") or "").strip()
+        if not url:
+            continue
+        entry: dict = {"url": url}
+        what = str(item.get("what") or item.get("note") or item.get("desc") or "").strip()
+        if what:
+            entry["what"] = what[:200]
+        snippet = str(item.get("snippet") or item.get("context") or "").strip()
+        if snippet:
+            entry["snippet"] = snippet[:400]
+        for key, out in (("approx_line", "approx_line"), ("line", "approx_line"), ("lineno", "approx_line")):
+            if key in item and item[key] is not None:
+                try:
+                    line = int(item[key])
+                    if line > 0:
+                        entry["approx_line"] = line
+                        break
+                except (TypeError, ValueError):
+                    pass
+        for key in ("offset", "match_offset", "pos"):
+            if key in item and item[key] is not None:
+                try:
+                    entry["offset"] = max(0, int(item[key]))
+                    break
+                except (TypeError, ValueError):
+                    pass
+        cleaned.append(entry)
+    if cleaned:
+        result["code_locations"] = cleaned
+    else:
+        result.pop("code_locations", None)
+    result.pop("locations", None)
+    result.pop("source_locations", None)
+    return result
+
+
 def _clean_steps(result: dict, role: str = "decrypt") -> dict:
+    _normalize_code_locations(result)
     valid_types = set(BUILTIN_STEP_TYPES) | set(get_extension_choices())
     steps = result.get("steps") or []
     cleaned = []
@@ -319,6 +459,39 @@ def _clean_steps(result: dict, role: str = "decrypt") -> dict:
         result["confidence"] = "low"
     return result
 
+
+def format_code_locations_text(locations: list | None) -> str:
+    """人类可读的源码位置列表（不参与 codegen）。"""
+    if not locations:
+        return "（本次未识别到源码位置；可再追问 Agent 补充 code_locations）"
+    lines: list[str] = [
+        "加解密相关源码位置（仅供人工查找，与生成的 plugin 步骤无关）",
+        "",
+    ]
+    for i, loc in enumerate(locations, 1):
+        if not isinstance(loc, dict):
+            continue
+        url = loc.get("url") or ""
+        what = loc.get("what") or ""
+        line = loc.get("approx_line")
+        offset = loc.get("offset")
+        snippet = (loc.get("snippet") or "").replace("\n", " ").strip()
+        head = f"{i}. {what}" if what else f"{i}."
+        lines.append(head.strip() or f"{i}.")
+        lines.append(f"   URL: {url}")
+        meta_parts = []
+        if line is not None:
+            meta_parts.append(f"约第 {line} 行")
+        if offset is not None:
+            meta_parts.append(f"offset={offset}")
+        if meta_parts:
+            lines.append(f"   {' · '.join(meta_parts)}")
+        if snippet:
+            if len(snippet) > 180:
+                snippet = snippet[:180] + "…"
+            lines.append(f"   片段: {snippet}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
 
 def _select_scripts_text(
     scripts: dict[str, str],

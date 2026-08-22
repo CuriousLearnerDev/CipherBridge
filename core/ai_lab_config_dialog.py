@@ -50,7 +50,7 @@ class AILabConfigDialog(QDialog):
         self.test_btn = QPushButton("测试连接")
         self.test_btn.setToolTip("发送最小请求验证 API Key、Base URL、模型与代理")
         self.test_btn.clicked.connect(self._test_config)
-        style_sidebar_aux_button(self.test_btn)
+        style_button(self.test_btn, "ghost", size="sm")
         ai_form.addRow("", self.test_btn)
         hint = QLabel(
             "配置保存至 config/ai.yaml（已在 .gitignore 中）。"
@@ -67,14 +67,14 @@ class AILabConfigDialog(QDialog):
         adv_layout = QVBoxLayout(adv_page)
         adv_grp = QGroupBox("浏览器代理")
         adv_form = QFormLayout(adv_grp)
-        self.mitm_check = QCheckBox(f"经 {APP_TITLE} 解密端转发（一般不需要）")
+        self.mitm_check = QCheckBox(f"经 {APP_TITLE} 解密端转发（与左侧监听端口一致，默认 8083）")
         self.mitm_port = QSpinBox()
         self.mitm_port.setRange(1024, 65535)
-        self.mitm_port.setValue(8080)
+        self.mitm_port.setValue(8083)
         self.mitm_port.setEnabled(False)
         self.mitm_check.toggled.connect(self.mitm_port.setEnabled)
         adv_form.addRow(self.mitm_check)
-        adv_form.addRow("代理端口:", self.mitm_port)
+        adv_form.addRow("解密端端口:", self.mitm_port)
         adv_layout.addWidget(adv_grp)
         adv_layout.addStretch()
         self.tabs.addTab(adv_page, "高级")
@@ -102,22 +102,34 @@ class AILabConfigDialog(QDialog):
         self.http_proxy_edit.setText(cfg.get("http_proxy", "127.0.0.1:7897"))
         browser = cfg.get("browser", {})
         self.mitm_check.setChecked(bool(browser.get("use_mitm_proxy", False)))
-        self.mitm_port.setValue(int(browser.get("mitm_port", 8080)))
+        self.mitm_port.setValue(int(browser.get("mitm_port", 8083)))
         self.mitm_port.setEnabled(self.mitm_check.isChecked())
 
-    def collect(self, *, hook_enabled: bool) -> dict:
+    def collect(
+        self,
+        *,
+        hook_enabled: bool,
+        anti_debug: bool = False,
+        cdp_skip_pauses: bool = True,
+        inject_opts: dict | None = None,
+    ) -> dict:
+        browser = {
+            "hook_enabled": hook_enabled,
+            "anti_debug": anti_debug,
+            "cdp_skip_pauses": cdp_skip_pauses,
+            "headless": False,
+            "use_mitm_proxy": self.mitm_check.isChecked(),
+            "mitm_port": self.mitm_port.value(),
+        }
+        if inject_opts is not None:
+            browser["inject_opts"] = inject_opts
         return {
             "api_key": self.api_key_edit.text().strip(),
             "base_url": self.base_url_edit.text().strip(),
             "model": self.model_edit.text().strip(),
             "use_http_proxy": self.proxy_check.isChecked(),
             "http_proxy": self.http_proxy_edit.text().strip(),
-            "browser": {
-                "hook_enabled": hook_enabled,
-                "headless": False,
-                "use_mitm_proxy": self.mitm_check.isChecked(),
-                "mitm_port": self.mitm_port.value(),
-            },
+            "browser": browser,
         }
 
     def _test_config(self) -> None:

@@ -12,14 +12,14 @@ ROOT = get_app_root()
 SETTINGS_PATH = os.path.join(ROOT, "config", "settings.yaml")
 
 _DEFAULTS = {
-    "app": {"name": "密桥", "name_en": "CipherBridge", "version": "3.5"},
+    "app": {"name": "密桥", "name_en": "CipherBridge", "version": "4.0"},
     "proxy": {
         "default_decrypt_port": 8083,
         "default_encrypt_port": 8081,
         "default_burp_address": "http://127.0.0.1:8080",
         "timeout": 30,
     },
-    "gui": {"theme": "dark", "font_size": 11, "max_log_lines": 5000},
+    "gui": {"theme": "light", "font_size": 11, "max_log_lines": 5000, "ui": "qt"},
     "analyzer": {"auto_detect": True, "entropy_threshold": 0.8},
     "replay": {"auto_sign": True, "auto_encrypt": True},
 }
@@ -54,11 +54,11 @@ def save_settings(updates: dict) -> None:
 
 
 def get_theme() -> str:
-    theme = (load_settings().get("gui") or {}).get("theme", "dark")
-    return theme if theme in ("dark", "light") else "dark"
+    theme = (load_settings().get("gui") or {}).get("theme", "light")
+    return theme if theme in ("dark", "light") else "light"
 
 
 def set_theme(theme: str) -> None:
     if theme not in ("dark", "light"):
-        theme = "dark"
+        theme = "light"
     save_settings({"gui": {"theme": theme}})

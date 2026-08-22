@@ -6,11 +6,11 @@
 
 
 
-    var MAX_BODY = 4000;
+    var MAX_BODY = 200000;
 
-    var MAX_HDR_VAL = 500;
+    var MAX_HDR_VAL = 8000;
 
-    var MAX_HDRS = 40;
+    var MAX_HDRS = 80;
 
 
 
@@ -110,6 +110,80 @@
 
 
 
+    function enrichBrowserHeaders(hdrs) {
+
+        var out = {};
+
+        if (hdrs) {
+
+            for (var k in hdrs) {
+
+                if (Object.prototype.hasOwnProperty.call(hdrs, k)) out[k] = hdrs[k];
+
+            }
+
+        }
+
+        function has(name) {
+
+            var low = String(name).toLowerCase();
+
+            for (var k in out) {
+
+                if (k.toLowerCase() === low) return true;
+
+            }
+
+            return false;
+
+        }
+
+        try {
+
+            if (!has('User-Agent') && typeof navigator !== 'undefined' && navigator.userAgent) {
+
+                out['User-Agent'] = navigator.userAgent;
+
+            }
+
+            if (!has('Accept')) {
+
+                out['Accept'] = '*/*';
+
+            }
+
+            if (!has('Accept-Language') && navigator.language) {
+
+                out['Accept-Language'] = navigator.language;
+
+            }
+
+            if (!has('Referer') && typeof location !== 'undefined' && location.href) {
+
+                out['Referer'] = location.href;
+
+            }
+
+            if (!has('Origin') && typeof location !== 'undefined' && location.origin) {
+
+                out['Origin'] = location.origin;
+
+            }
+
+            if (!has('Cookie') && typeof document !== 'undefined' && document.cookie) {
+
+                out['Cookie'] = document.cookie;
+
+            }
+
+        } catch (e) { /* ignore */ }
+
+        return trimHeaders(out);
+
+    }
+
+
+
     function emitCapture(payload) {
 
         try {
@@ -120,7 +194,7 @@
 
             if (payload.request_headers) {
 
-                payload.request_headers = trimHeaders(payload.request_headers);
+                payload.request_headers = enrichBrowserHeaders(payload.request_headers);
 
             }
 

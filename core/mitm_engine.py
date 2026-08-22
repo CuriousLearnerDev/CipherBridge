@@ -127,10 +127,8 @@ class MitmEngine:
         self._call_plugin(profile_name, flow, "request")
         log_http_message(flow, "request", self.role, profile_name)
 
-        # 插件已含 requests 转发时 flow.response 已设置，避免重复转发
-        if self.role == "decrypt" and flow.response is None:
-            self._forward_to_burp(flow)
-        elif self.role == "encrypt" and flow.response is None:
+        # 解密端走 --mode upstream→Burp；加密端若插件未自行结束则直连服务器
+        if self.role == "encrypt" and flow.response is None:
             self._forward_to_server(flow)
 
         if flow.response is not None:

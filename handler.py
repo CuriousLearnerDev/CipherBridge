@@ -59,19 +59,25 @@ class DecryptHandler:
 
     def _init_forwarder(self):
         proxy = self.config.get("proxy", {})
-        fwd = {"decrypt_to": proxy.get("decrypt_forward"), "encrypt_to": proxy.get("encrypt_forward"),
-               "timeout": proxy.get("timeout", 30)}
+        decrypt_to = proxy.get("decrypt_forward")
+        if not decrypt_to:
+            burp = os.environ.get("BURP_PORT", "8080").strip() or "8080"
+            decrypt_to = f"http://127.0.0.1:{burp}"
+        fwd = {
+            "decrypt_to": decrypt_to,
+            "encrypt_to": proxy.get("encrypt_forward"),
+            "timeout": proxy.get("timeout", 30),
+        }
         self.forwarder = Forwarder(**fwd)
 
     def request(self, flow: http.HTTPFlow) -> None:
-        if not self.plugin.match_request(flow):
-            return
-        self.plugin.process_request(flow, self.mode)
-        if self.signer:
-            self.signer.sign({}, flow, self.plugin.algorithm)
-        if self.mode == "decrypt":
-            self.forwarder.forward_decrypt(flow)
-        else:
+        matched = self.plugin.match_request(flow)
+        if matched:
+            self.plugin.process_request(flow, self.mode)
+            if self.signer:
+                self.signer.sign({}, flow, self.plugin.algorithm)
+        # 解密端：由 mitmdump --mode upstream 进 Burp，勿再 requests 转发
+        if self.mode == "encrypt" and matched:
             self.forwarder.forward_encrypt(flow)
 
     def response(self, flow: http.HTTPFlow) -> None:

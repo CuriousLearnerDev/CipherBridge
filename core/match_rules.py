@@ -8,6 +8,27 @@ import urllib.parse
 from typing import Any
 
 
+def _normalize_path(path: str) -> str:
+    """mitmproxy 的 path 常带 query，匹配前去掉."""
+    p = path or ""
+    if "?" in p:
+        p = p.split("?", 1)[0]
+    return p or "/"
+
+
+def _path_matches(path: str, pattern: str) -> bool:
+    """支持 /api/* 同时命中 /api 与 /api/xxx."""
+    path = _normalize_path(path)
+    pattern = (pattern or "").strip() or "*"
+    if fnmatch.fnmatch(path, pattern):
+        return True
+    if pattern.endswith("/*"):
+        base = pattern[:-2] or "/"
+        if path == base or path == base + "/":
+            return True
+    return False
+
+
 def matches_request(
     match: dict[str, Any],
     *,
@@ -35,7 +56,7 @@ def matches_request(
             return False
 
     paths = match.get("path", [])
-    if paths and not any(fnmatch.fnmatch(path, p) for p in paths):
+    if paths and not any(_path_matches(path, p) for p in paths):
         return False
 
     methods = match.get("methods", [])
@@ -86,11 +107,11 @@ def _should_process(flow: http.HTTPFlow) -> bool:
         if _MATCH_MISS_LOGGED < 5:
             _MATCH_MISS_LOGGED += 1
             print(
-                f"跳过(未匹配规则): {{flow.request.method}} "
+                f"跳过加解密(未匹配规则，仍转发Burp): {{flow.request.method}} "
                 f"{{flow.request.host}}{{flow.request.path}}"
             )
             if _MATCH_MISS_LOGGED == 5:
-                print("跳过(未匹配规则): 后续同类提示已省略，请检查 profiles 的 match 或左侧「规则」")
+                print("跳过加解密: 后续同类提示已省略，请检查 profiles 的 match 或左侧「规则」")
     return ok
 
 '''

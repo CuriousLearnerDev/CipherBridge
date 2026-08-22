@@ -28,6 +28,14 @@ def _ci_contains(hay: str, needle: str) -> bool:
     return needle.casefold() in (hay or "").casefold()
 
 
+def _approx_line(text: str, offset: int) -> int:
+    """字符 offset → 约第几行（1-based），便于人工定位源码。"""
+    if not text:
+        return 1
+    off = max(0, min(int(offset or 0), len(text)))
+    return text.count("\n", 0, off) + 1
+
+
 @dataclass
 class SessionData:
     """GUI 注入的只读会话素材（勿在工具内写回改流量）."""
@@ -55,6 +63,13 @@ class SessionData:
             return {}
 
 
+def _flow_seq(flow: dict, fallback: int) -> int:
+    s = flow.get("_seq")
+    if isinstance(s, int) and s > 0:
+        return s
+    return fallback
+
+
 class FlowTool(BaseTool):
     """只读查询已抓 HTTP 流量，找密文字段 / URL."""
 
@@ -69,26 +84,34 @@ class FlowTool(BaseTool):
             description=(
                 "只读查询当前会话已抓取的 HTTP 流量。"
                 "list=摘要列表；get=按 index 取详情；search=按关键字搜 URL/Body。"
+                "每条含 seq=捕获顺序(#1 最早)，index=当前列表下标。"
             ),
             actions=["list", "get", "search"],
             tags=["crypto", "readonly", "traffic"],
         )
 
+    def _summary(self, i: int, f: dict) -> dict:
+        return {
+            "index": i,
+            "seq": _flow_seq(f, i + 1),
+            "method": f.get("method"),
+            "url": _clip(str(f.get("url") or ""), 160),
+            "status": f.get("status"),
+        }
+
     async def execute(self, action: str, **kwargs: Any) -> Any:
         flows = self._session.flows()
         if action == "list":
             limit = int(kwargs.get("limit") or MAX_LIST)
-            items = []
-            for i, f in enumerate(flows[: max(1, min(limit, 80))]):
-                items.append(
-                    {
-                        "index": i,
-                        "method": f.get("method"),
-                        "url": _clip(str(f.get("url") or ""), 160),
-                        "status": f.get("status"),
-                    }
-                )
-            return {"total": len(flows), "items": items}
+            items = [
+                self._summary(i, f)
+                for i, f in enumerate(flows[: max(1, min(limit, 80))])
+            ]
+            return {
+                "total": len(flows),
+                "note": "seq 为捕获顺序（与界面 #序号一致）；index 为本列表下标，get 时用 index",
+                "items": items,
+            }
 
         if action == "get":
             try:
@@ -100,6 +123,7 @@ class FlowTool(BaseTool):
             f = flows[idx]
             return {
                 "index": idx,
+                "seq": _flow_seq(f, idx + 1),
                 "method": f.get("method"),
                 "url": f.get("url"),
                 "status": f.get("status"),
@@ -125,14 +149,7 @@ class FlowTool(BaseTool):
                 )
                 if not _ci_contains(blob, query):
                     continue
-                hits.append(
-                    {
-                        "index": i,
-                        "method": f.get("method"),
-                        "url": _clip(str(f.get("url") or ""), 160),
-                        "status": f.get("status"),
-                    }
-                )
+                hits.append(self._summary(i, f))
                 if len(hits) >= MAX_SEARCH_HITS:
                     break
             return {"query": query, "hit_count": len(hits), "hits": hits}
@@ -268,6 +285,7 @@ class ScriptTool(BaseTool):
                             "url": url,
                             "chars": len(text),
                             "match_offset": pos,
+                            "approx_line": _approx_line(text, pos),
                             "read_hint": f"script.read url=... offset={max(0, pos - 200)}",
                             "context": text[start:end],
                         }
@@ -282,6 +300,7 @@ class ScriptTool(BaseTool):
                             "url": url,
                             "chars": len(text),
                             "match_offset": 0,
+                            "approx_line": 1,
                             "context": _clip(text, 200),
                         }
                     )
@@ -291,7 +310,10 @@ class ScriptTool(BaseTool):
                 "query": query,
                 "hit_count": len(hits),
                 "hits": hits,
-                "note": "请用 match_offset 作为 script.read 的 offset；context 通常已够下结论",
+                "note": (
+                    "请用 match_offset 作为 script.read 的 offset；"
+                    "approx_line 写入最终 JSON 的 code_locations（仅供人工找代码，不进 steps）"
+                ),
             }
 
         if action == "read":
@@ -333,6 +355,7 @@ class ScriptTool(BaseTool):
             return {
                 "url": matched,
                 "offset": offset,
+                "approx_line": _approx_line(content or "", offset),
                 "chars_total": total,
                 "content": chunk,
                 "truncated": total > offset + MAX_SCRIPT_CHUNK,

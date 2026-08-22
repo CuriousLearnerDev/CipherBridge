@@ -1,0 +1,25 @@
+CipherBridge Upstream — Burp 扩展
+
+文件: CipherBridge-Upstream.jar
+
+====================
+用途（本地代理拓扑）
+====================
+浏览器 → 解密:8083 → Burp → 加密:8081 → 服务器
+
+密桥生成 plugin.py，mitmdump 改包；
+扩展负责：自动设 Burp 上游、发送流量到密桥、查看日志。
+
+====================
+安装
+====================
+Extensions → Add → Java → CipherBridge-Upstream.jar
+成功后顶部出现页签「CipherBridge」：
+  - 上游代理
+  - 流量（发送到密桥 / 上游变更）
+
+====================
+注意
+====================
+- 右键「发送到密桥」需密桥 GUI 已打开
+- 加解密仍走密桥本地代理插件（plugin.py），不在 Burp 内加载配置

@@ -145,9 +145,9 @@ def sm4_encrypt_ecb(plaintext: str, key: str, padding: str = "PKCS7") -> str:
     return base64.b64encode(result).decode("utf-8")
 
 
-def sm4_decrypt_ecb(ciphertext: str, key: str, padding: str = "PKCS7") -> str:
+def sm4_decrypt_ecb(ciphertext: str, key: str, padding: str = "PKCS7", input_fmt: str = "base64") -> str:
     sm4 = SM4(key.encode("utf-8"))
-    data = base64.b64decode(ciphertext)
+    data = base64.b64decode(ciphertext) if input_fmt == "base64" else bytes.fromhex(ciphertext)
     result = b""
     for i in range(0, len(data), 16):
         result += sm4.decrypt_block(data[i:i+16])
@@ -176,10 +176,10 @@ def sm4_encrypt_cbc(plaintext: str, key: str, iv: str, padding: str = "PKCS7") -
     return base64.b64encode(result).decode("utf-8")
 
 
-def sm4_decrypt_cbc(ciphertext: str, key: str, iv: str, padding: str = "PKCS7") -> str:
+def sm4_decrypt_cbc(ciphertext: str, key: str, iv: str, padding: str = "PKCS7", input_fmt: str = "base64") -> str:
     sm4 = SM4(key.encode("utf-8"))
     iv_bytes = iv.encode("utf-8")[:16].ljust(16, b'\x00')
-    data = base64.b64decode(ciphertext)
+    data = base64.b64decode(ciphertext) if input_fmt == "base64" else bytes.fromhex(ciphertext)
     result = b""
     prev = iv_bytes
     for i in range(0, len(data), 16):

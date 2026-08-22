@@ -5,7 +5,15 @@ agent_base_url: ""
 agent_max_steps: 50
 browser:
   headless: false
+  # 默认只开密钥 Hook；反调试 / CDP / 响应改写按需勾选
   hook_enabled: true
+  anti_debug: false
+  cdp_skip_pauses: false
+  # 默认加载油猴(Violentmonkey) + ReRes；首次启动用 ext_proxy 拉 GitHub
+  load_violentmonkey: true
+  load_reres: true
+  load_cb_hook: true
+  ext_proxy: 127.0.0.1:7897
   mitm_port: 8080
   use_mitm_proxy: false
 http_proxy: 127.0.0.1:7897

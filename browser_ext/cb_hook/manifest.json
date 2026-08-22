@@ -1,0 +1,44 @@
+{
+  "manifest_version": 3,
+  "name": "CipherBridge Hook",
+  "version": "1.2.0",
+  "description": "密桥：页面 Hook 注入 + 代理切换（直连/解密端/Burp）",
+  "permissions": [
+    "storage",
+    "proxy"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "CipherBridge Hook",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "bootstrap.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "inject.js",
+        "options.json",
+        "proxy_pref.json"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ]
+}

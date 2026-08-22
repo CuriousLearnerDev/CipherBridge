@@ -9,12 +9,15 @@
 
 # ── GUI ──────────────────────────────────────────────
 PyQt6>=6.6,<7
+PyQt6-WebEngine>=6.6,<7
 
 # ── 配置 / 项目 ──────────────────────────────────────
 PyYAML>=6.0
 
 # ── 加解密 (AES / DES / RSA 等，含国密 SM3/SM4 为内置纯 Python) ──
 pycryptodome>=3.20
+# SM2 国密非对称（可视化/测试里选 SM2 时需要）:
+#   pip install gmssl
 
 # ── HTTP 客户端 (插件转发 Burp、AI API 调用等) ───────
 requests>=2.31
@@ -25,6 +28,10 @@ pydantic>=2.0
 
 # ── 代理核心 (mitmdump，含 HTTPS 解密) ───────────────
 mitmproxy>=10.0,<12
+
+# ── 前端壳本地 API（Vue / QWebEngine）────────────────
+fastapi>=0.115.0
+uvicorn>=0.32.0
 
 # ── AI自动化分析 — 浏览器 Hook / 流量采集 (可选) ─────
 # 不使用 AI Tab 的浏览器功能时可注释掉下一行

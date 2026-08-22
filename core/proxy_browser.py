@@ -108,21 +108,25 @@ class ProxyBrowserWorker(QThread):
             return
 
         proxy = f"http://127.0.0.1:{self.proxy_port}"
-        self.log.emit(f"启动浏览器，代理 → {proxy}")
+        self.log.emit(f"启动浏览器，代理 → {proxy}（解密端）")
         launch_error: str | None = None
 
         try:
             async with async_playwright() as p:
+                # launch + context + Chromium 参数三处都指定代理，避免只配 context 时未生效
                 browser = await p.chromium.launch(
                     headless=False,
+                    proxy={"server": proxy},
                     args=[
                         "--start-maximized",
                         "--ignore-certificate-errors",
                         "--disable-features=HttpsFirstBalancedModeAutoEnable",
                         "--allow-file-access-from-files",
+                        f"--proxy-server={proxy}",
+                        "--proxy-bypass-list=<-loopback>",
                     ],
                 )
-                # 本地起始页不走代理；后续导航 http(s) 才走解密端
+                # 起始拓扑页可为本地 HTML；之后 http(s) 一律经解密端
                 context = await browser.new_context(
                     ignore_https_errors=True,
                     proxy={"server": proxy},

@@ -21,7 +21,25 @@ DEFAULT = {
     "agent_base_url": "",
     "agent_max_steps": 50,
     "browser": {
+        # 默认只开密钥 Hook；反调试相关需在「注入」菜单手动勾选
         "hook_enabled": True,
+        "anti_debug": False,
+        "cdp_skip_pauses": False,
+        "inject_opts": {
+            "functionHook": True,
+            "evalHook": True,
+            "timerHook": True,
+            "timerNuke": False,
+            "consoleClear": True,
+            "sizeSpoof": True,
+            # 响应里 debugger→return（默认关，需要时在注入菜单勾选）
+            "rewriteResponse": False,
+        },
+        # 默认加载油猴(Violentmonkey) + ReRes；首次启动经代理拉 GitHub
+        "load_violentmonkey": True,
+        "load_reres": True,
+        "load_cb_hook": True,
+        "ext_proxy": "127.0.0.1:7897",
         "headless": False,
         "use_mitm_proxy": False,
         "mitm_port": 8083,

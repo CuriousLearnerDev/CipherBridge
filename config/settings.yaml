@@ -1,16 +1,17 @@
 app:
   name: 密桥
   name_en: CipherBridge
-  version: '3.5'
+  version: '5.0'
 proxy:
   default_decrypt_port: 8083
   default_encrypt_port: 8081
   default_burp_address: http://127.0.0.1:8080
   timeout: 30
 gui:
-  theme: dark
+  theme: light
   font_size: 11
   max_log_lines: 5000
+  ui: qt
 analyzer:
   auto_detect: true
   entropy_threshold: 0.8

@@ -1,51 +1,49 @@
-"""密桥主页 — 状态概览与上手引导（层级清晰、拓扑居中）."""
+"""密桥主页 — 状态 + 上手 + 拓扑示意图。"""
 
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
-    QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
-    QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
+    QFrame, QHBoxLayout, QLabel, QPushButton,
+    QSizePolicy, QVBoxLayout, QWidget,
 )
 
-from core.icon_loader import TOPOLOGY_IMAGE
-from core.theme import C, style_button, style_muted_label
+from core.brand import APP_NAME, APP_SUBTITLE
+from core.icon_loader import TOPOLOGY_IMAGE, set_btn_icon
+from core.theme import style_button
 
 
-class _StatCell(QWidget):
-    """状态条里的一格，无独立边框."""
-
+class _StatusCell(QWidget):
     def __init__(self, label: str, parent=None):
         super().__init__(parent)
-        self.setObjectName("homeStatCard")
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 12, 16, 12)
-        layout.setSpacing(4)
+        self.setObjectName("homeStatusCell")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(12, 8, 12, 8)
+        lay.setSpacing(2)
         self._label = QLabel(label)
-        style_muted_label(self._label)
+        self._label.setObjectName("homeMetaLabel")
         self._value = QLabel("—")
-        self._value.setObjectName("homeStatValue")
-        layout.addWidget(self._label)
-        layout.addWidget(self._value)
+        self._value.setObjectName("homeMetaValue")
+        lay.addWidget(self._label)
+        lay.addWidget(self._value)
 
     def set_value(self, text: str, *, running: bool | None = None) -> None:
         self._value.setText(text)
         if running is True:
-            self._value.setStyleSheet(
-                f"color:{C.get('ok', C['primary'])}; font-weight:600; background:transparent;"
-            )
+            self._value.setProperty("state", "running")
         elif running is False:
-            self._value.setStyleSheet(f"color:{C['text_dim']}; background:transparent;")
+            self._value.setProperty("state", "stopped")
         else:
-            self._value.setStyleSheet("background:transparent;")
+            self._value.setProperty("state", "")
+        self._value.style().unpolish(self._value)
+        self._value.style().polish(self._value)
 
 
 class HomeTab(QWidget):
-    """工具主页."""
-
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("homePage")
         self._routes: dict[str, QWidget] = {}
         self._tab_widget = None
         self._build_ui()
@@ -55,109 +53,135 @@ class HomeTab(QWidget):
         self._routes = routes
 
     def _build_ui(self) -> None:
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(24, 20, 24, 20)
+        root.setSpacing(12)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # 顶行：标题 + 入口（无大卡片边框）
+        top = QHBoxLayout()
+        top.setSpacing(10)
+        title_col = QVBoxLayout()
+        title_col.setSpacing(2)
+        title = QLabel(APP_NAME)
+        title.setObjectName("homeTitle")
+        title_col.addWidget(title)
+        sub = QLabel(APP_SUBTITLE)
+        sub.setObjectName("homeSub")
+        title_col.addWidget(sub)
+        top.addLayout(title_col, 1)
+        for text, key, icon_name, variant in (
+            ("解析报文", "parser", "parser", "primary"),
+            ("可视化构建", "builder", "builder", "default"),
+            ("AI 分析", "ai", "ai", "default"),
+        ):
+            b = QPushButton(text)
+            style_button(b, variant, size="sm")
+            try:
+                set_btn_icon(b, icon_name, size=13)
+            except Exception:
+                pass
+            b.clicked.connect(lambda _=False, k=key: self._go(k))
+            top.addWidget(b, 0, Qt.AlignmentFlag.AlignVCenter)
+        root.addLayout(top)
 
-        body = QWidget()
-        root = QVBoxLayout(body)
-        root.setContentsMargins(32, 24, 32, 32)
-        root.setSpacing(18)
-
-        root.addWidget(self._section("运行状态"))
+        # 状态一行
         strip = QFrame()
-        strip.setObjectName("homeStatStrip")
-        stat_row = QHBoxLayout(strip)
-        stat_row.setContentsMargins(0, 0, 0, 0)
-        stat_row.setSpacing(0)
-        self.chip_project = _StatCell("当前项目")
-        self.chip_decrypt = _StatCell("解密端")
-        self.chip_encrypt = _StatCell("加密端")
-        self.chip_cert = _StatCell("HTTPS 证书")
+        strip.setObjectName("homeStatusStrip")
+        strip_row = QHBoxLayout(strip)
+        strip_row.setContentsMargins(2, 2, 2, 2)
+        strip_row.setSpacing(0)
+        self.chip_project = _StatusCell("项目")
+        self.chip_decrypt = _StatusCell("解密端")
+        self.chip_encrypt = _StatusCell("加密端")
+        self.chip_cert = _StatusCell("证书")
+        self._status_seps: list[QFrame] = []
         cells = (self.chip_project, self.chip_decrypt, self.chip_encrypt, self.chip_cert)
-        for i, chip in enumerate(cells):
-            chip.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-            stat_row.addWidget(chip)
+        for i, cell in enumerate(cells):
+            cell.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+            strip_row.addWidget(cell)
             if i < len(cells) - 1:
                 sep = QFrame()
-                sep.setObjectName("homeStatSep")
+                sep.setObjectName("homeStatusSep")
                 sep.setFixedWidth(1)
-                stat_row.addWidget(sep)
+                sep.setFixedHeight(30)
+                strip_row.addWidget(sep, 0, Qt.AlignmentFlag.AlignVCenter)
+                self._status_seps.append(sep)
         root.addWidget(strip)
 
-        root.addWidget(self._section("部署拓扑"))
-        topo_wrap = QHBoxLayout()
-        topo_wrap.setContentsMargins(0, 0, 0, 0)
-        topo_wrap.addStretch(1)
+        # 上手：横向三步，不占大块竖空
+        steps = QFrame()
+        steps.setObjectName("homeStepsBar")
+        sl = QHBoxLayout(steps)
+        sl.setContentsMargins(4, 4, 4, 4)
+        sl.setSpacing(8)
+        for num, title, desc, route in (
+            ("1", "解析报文", "粘贴抓包，点选字段", "parser"),
+            ("2", "组装步骤", "构建器调序并保存", "builder"),
+            ("3", "启动代理", "左侧启停解密/加密", None),
+        ):
+            card = QFrame()
+            card.setObjectName("homeStepCard")
+            cl = QHBoxLayout(card)
+            cl.setContentsMargins(10, 8, 10, 8)
+            cl.setSpacing(8)
+            badge = QLabel(num)
+            badge.setObjectName("homeStepNum")
+            badge.setFixedSize(22, 22)
+            badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            cl.addWidget(badge)
+            col = QVBoxLayout()
+            col.setSpacing(1)
+            t = QLabel(title)
+            t.setObjectName("homeStepTitle")
+            d = QLabel(desc)
+            d.setObjectName("homeStepDesc")
+            col.addWidget(t)
+            col.addWidget(d)
+            cl.addLayout(col, 1)
+            if route:
+                go = QPushButton("打开")
+                style_button(go, "ghost", size="sm")
+                go.clicked.connect(lambda _=False, k=route: self._go(k))
+                cl.addWidget(go)
+            sl.addWidget(card, 1)
+        root.addWidget(steps)
+
+        # 结构图：链路标签 + 拓扑大图（主视觉）
+        topo = QFrame()
+        topo.setObjectName("homeTopoPanel")
+        tl = QVBoxLayout(topo)
+        tl.setContentsMargins(14, 12, 14, 14)
+        tl.setSpacing(10)
+
+        topo_head = QHBoxLayout()
+        topo_head.addWidget(self._caption("部署结构"))
+        topo_head.addStretch(1)
+        path = QLabel("客户端 → 解密端 → Burp → 加密端 → 服务器")
+        path.setObjectName("homeTopoPath")
+        topo_head.addWidget(path)
+        tl.addLayout(topo_head)
+
         self._topo_label = QLabel()
         self._topo_label.setObjectName("homeTopology")
         self._topo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._topo_label.setMaximumWidth(1100)
+        self._topo_label.setMinimumHeight(220)
         self._topo_label.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
         self._topo_pixmap = QPixmap(TOPOLOGY_IMAGE)
-        self._update_topology_image()
-        topo_wrap.addWidget(self._topo_label, 8)
-        topo_wrap.addStretch(1)
-        root.addLayout(topo_wrap)
-
-        root.addWidget(self._section("上手"))
-        flow = QFrame()
-        flow.setObjectName("homeWorkflow")
-        fl = QGridLayout(flow)
-        fl.setContentsMargins(0, 4, 0, 4)
-        fl.setHorizontalSpacing(10)
-        fl.setVerticalSpacing(8)
-        steps = [
-            ("01", "解析报文", "请求解析器粘贴抓包，点选密文字段"),
-            ("02", "组装步骤", "可视化构建器调序，预览生成代码"),
-            ("03", "保存项目", "保存后在左侧控制面板选择项目"),
-            ("04", "启动代理", "启停解密/加密端，配置浏览器代理"),
-        ]
-        for row, (num, st, sd) in enumerate(steps):
-            badge = QLabel(num)
-            badge.setObjectName("homeStepBadge")
-            badge.setFixedWidth(22)
-            badge.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-            st_lbl = QLabel(st)
-            st_lbl.setObjectName("homeCardTitle")
-            sd_lbl = QLabel(sd)
-            sd_lbl.setWordWrap(True)
-            style_muted_label(sd_lbl)
-            fl.addWidget(badge, row, 0, Qt.AlignmentFlag.AlignTop)
-            st_col = QVBoxLayout()
-            st_col.setSpacing(2)
-            st_col.addWidget(st_lbl)
-            st_col.addWidget(sd_lbl)
-            fl.addLayout(st_col, row, 1)
-        root.addWidget(flow)
-
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(10)
-        btn_parser = QPushButton("解析报文")
-        btn_parser.clicked.connect(lambda: self._go("parser"))
-        style_button(btn_parser, "primary")
-        btn_builder = QPushButton("打开构建器")
-        btn_builder.clicked.connect(lambda: self._go("builder"))
-        style_button(btn_builder, "ghost")
-        btn_row.addWidget(btn_parser)
-        btn_row.addWidget(btn_builder)
-        btn_row.addStretch()
-        root.addLayout(btn_row)
-        root.addStretch()
-
-        scroll.setWidget(body)
-        outer.addWidget(scroll)
+        if self._topo_pixmap.isNull():
+            self._topo_label.setText(
+                "客户端 → 解密端(:8083) → Burp(:8080) → 加密端(:8081) → 服务器"
+            )
+        else:
+            self._update_topology_image()
+        tl.addWidget(self._topo_label, 1)
+        root.addWidget(topo, 1)
 
     @staticmethod
-    def _section(text: str) -> QLabel:
+    def _caption(text: str) -> QLabel:
         lbl = QLabel(text)
-        lbl.setObjectName("homeSectionTitle")
+        lbl.setObjectName("homeCaption")
         return lbl
 
     def _go(self, key: str) -> None:
@@ -193,19 +217,33 @@ class HomeTab(QWidget):
         name = control.profile_combo.currentText() if hasattr(control, "profile_combo") else ""
         self.chip_project.set_value(name or "未选择")
 
+        roles = []
+        if name and hasattr(control, "_profile_roles"):
+            roles = control._profile_roles(name)
+
         dec_running = "运行中" in control.decrypt_status.text()
         dec_port = control.decrypt_port.value() if hasattr(control, "decrypt_port") else "?"
-        self.chip_decrypt.set_value(
-            f"{'运行' if dec_running else '停止'}  :{dec_port}",
-            running=dec_running,
-        )
+        has_decrypt = (not name) or ("decrypt" in roles) or dec_running
+        self.chip_decrypt.setVisible(has_decrypt)
+        if has_decrypt:
+            self.chip_decrypt.set_value(
+                f":{dec_port}  {'运行中' if dec_running else '已停止'}",
+                running=dec_running,
+            )
 
         enc_running = "运行中" in control.encrypt_status.text()
         enc_port = control.encrypt_port.value() if hasattr(control, "encrypt_port") else "?"
-        self.chip_encrypt.set_value(
-            f"{'运行' if enc_running else '停止'}  :{enc_port}",
-            running=enc_running,
-        )
+        has_encrypt = ("encrypt" in roles) or enc_running
+        self.chip_encrypt.setVisible(has_encrypt)
+        if has_encrypt:
+            self.chip_encrypt.set_value(
+                f":{enc_port}  {'运行中' if enc_running else '已停止'}",
+                running=enc_running,
+            )
+
+        if len(self._status_seps) >= 3:
+            self._status_seps[0].setVisible(self.chip_decrypt.isVisible())
+            self._status_seps[1].setVisible(self.chip_encrypt.isVisible())
 
         cert_text = control.cert_status.text() if hasattr(control, "cert_status") else ""
         trusted = "已安装" in cert_text
@@ -215,21 +253,22 @@ class HomeTab(QWidget):
         )
 
     def _update_topology_image(self) -> None:
-        if self._topo_pixmap.isNull():
-            self._topo_label.setText(
-                "浏览器/APP → 解密端(:8083) → Burp(:8080) → 加密端(:8081) → 服务器"
-            )
+        if self._topo_pixmap.isNull() or not hasattr(self, "_topo_label"):
             return
-        # 居中缩放：不超过容器宽度，也设上限避免超大屏拉得过大
-        avail = max(360, min(self.width() - 96, 1060))
-        self._topo_label.setPixmap(
-            self._topo_pixmap.scaledToWidth(avail, Qt.TransformationMode.SmoothTransformation)
+        # 尽量铺满可用区域，作为主视觉
+        max_w = max(420, self.width() - 80)
+        max_h = max(200, self.height() - 280)
+        pm = self._topo_pixmap.scaled(
+            max_w,
+            max_h,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
         )
+        self._topo_label.setPixmap(pm)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        if hasattr(self, "_topo_label"):
-            self._update_topology_image()
+        self._update_topology_image()
 
     def showEvent(self, event) -> None:
         super().showEvent(event)

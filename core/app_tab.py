@@ -26,7 +26,7 @@ from core.app_reverse import (
     tools_status,
 )
 from core.icon_loader import set_btn_icon
-from core.theme import style_button, style_muted_label, style_sidebar_aux_button
+from core.theme import style_button, style_muted_label, style_sidebar_aux_button, setup_sub_tabs
 
 
 class _DecodeWorker(QThread):
@@ -80,16 +80,14 @@ class AppReversePanel(QWidget):
         row.setSpacing(6)
         self.pick_btn = QPushButton("选择 APK")
         self.pick_btn.clicked.connect(self._pick_apk)
-        style_button(self.pick_btn, "accent")
+        style_button(self.pick_btn, "default", size="sm")
         set_btn_icon(self.pick_btn, "folder", size=14)
-        self.pick_btn.setMinimumHeight(32)
         row.addWidget(self.pick_btn, 1)
         self.decode_btn = QPushButton("反编译并扫描")
         self.decode_btn.setEnabled(False)
         self.decode_btn.clicked.connect(self._start_decode)
-        style_button(self.decode_btn, "primary")
+        style_button(self.decode_btn, "primary", size="sm")
         set_btn_icon(self.decode_btn, "unlock", size=14)
-        self.decode_btn.setMinimumHeight(32)
         row.addWidget(self.decode_btn, 1)
         layout.addLayout(row)
 
@@ -97,17 +95,17 @@ class AppReversePanel(QWidget):
         self.jadx_btn = QPushButton("打开 jadx")
         self.jadx_btn.setToolTip("用 jadx-gui 打开当前 APK 做深度查看")
         self.jadx_btn.clicked.connect(self._open_jadx)
-        style_sidebar_aux_button(self.jadx_btn)
+        style_button(self.jadx_btn, "ghost", size="sm")
         row2.addWidget(self.jadx_btn)
         self.open_out_btn = QPushButton("输出目录")
         self.open_out_btn.setEnabled(False)
         self.open_out_btn.clicked.connect(self._open_out)
-        style_sidebar_aux_button(self.open_out_btn)
+        style_button(self.open_out_btn, "ghost", size="sm")
         row2.addWidget(self.open_out_btn)
         self.setup_btn = QPushButton("配置工具")
         self.setup_btn.setToolTip("查看缺失工具说明，并打开 tools 目录自行放置")
         self.setup_btn.clicked.connect(self._show_tools_setup)
-        style_sidebar_aux_button(self.setup_btn)
+        style_button(self.setup_btn, "ghost", size="sm")
         row2.addWidget(self.setup_btn)
         row2.addStretch()
         layout.addLayout(row2)
@@ -128,6 +126,7 @@ class AppReversePanel(QWidget):
         layout.addWidget(self.status)
 
         tabs = QTabWidget()
+        setup_sub_tabs(tabs)
         self.hit_list = QListWidget()
         self.hit_list.itemClicked.connect(self._preview_hit)
         tabs.addTab(self.hit_list, "加解密候选")

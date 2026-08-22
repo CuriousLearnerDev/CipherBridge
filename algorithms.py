@@ -27,6 +27,7 @@ def create_algorithm(enc_cfg: dict):
         "SM4": SM4Algorithm,
         "XOR": XORAlgorithm,
         "RSA": RSAAlgorithm,
+        "SM2": SM2Algorithm,
     }.get(enc_cfg["algorithm"])
     if algo_cls is None:
         raise ValueError(f"不支持的算法: {enc_cfg['algorithm']}")
@@ -43,6 +44,7 @@ class AESAlgorithm:
         self.mode = _AES_MODE_MAP[mode_name]
         self._iv = enc_cfg.get("iv")
         self._nonce = enc_cfg.get("nonce")
+        self._input_fmt = enc_cfg.get("input_fmt", "base64")
 
     def _cipher(self, for_decrypt: bool = False):
         kwargs = {}
@@ -74,7 +76,7 @@ class AESAlgorithm:
     def decrypt(self, ciphertext: str) -> str:
         cipher = self._cipher(for_decrypt=True)
         padding_style = _PADDING_MAP.get(self.padding, "pkcs7")
-        raw = base64.b64decode(ciphertext)
+        raw = base64.b64decode(ciphertext) if self._input_fmt == "base64" else bytes.fromhex(ciphertext)
         decrypted = cipher.decrypt(raw)
         if self.padding == "NoPadding" or self.mode in (_AES.MODE_CTR, _AES.MODE_GCM):
             return decrypted.decode("utf-8")
@@ -96,6 +98,7 @@ class DESAlgorithm:
             raise ValueError(f"不支持的DES模式: {mode_name}")
         self.mode = mode_map[mode_name]
         self._iv = enc_cfg.get("iv")
+        self._input_fmt = enc_cfg.get("input_fmt", "base64")
 
     def _cipher(self):
         if self.mode == _DES.MODE_CBC:
@@ -116,7 +119,7 @@ class DESAlgorithm:
     def decrypt(self, ciphertext: str) -> str:
         cipher = self._cipher()
         padding_style = _PADDING_MAP.get(self.padding, "pkcs7")
-        raw = base64.b64decode(ciphertext)
+        raw = base64.b64decode(ciphertext) if self._input_fmt == "base64" else bytes.fromhex(ciphertext)
         decrypted = cipher.decrypt(raw)
         if self.padding == "NoPadding":
             return decrypted.decode("utf-8")
@@ -140,6 +143,7 @@ class TripleDESAlgorithm:
             raise ValueError(f"不支持的3DES模式: {mode_name}")
         self.mode = mode_map[mode_name]
         self._iv = enc_cfg.get("iv")
+        self._input_fmt = enc_cfg.get("input_fmt", "base64")
 
     def _cipher(self):
         if self.mode == _DES3.MODE_CBC:
@@ -160,7 +164,7 @@ class TripleDESAlgorithm:
     def decrypt(self, ciphertext: str) -> str:
         cipher = self._cipher()
         padding_style = _PADDING_MAP.get(self.padding, "pkcs7")
-        raw = base64.b64decode(ciphertext)
+        raw = base64.b64decode(ciphertext) if self._input_fmt == "base64" else bytes.fromhex(ciphertext)
         decrypted = cipher.decrypt(raw)
         if self.padding == "NoPadding":
             return decrypted.decode("utf-8")
@@ -173,6 +177,7 @@ class SM4Algorithm:
         self.padding = enc_cfg.get("padding", "PKCS7")
         self.mode = enc_cfg.get("mode", "ECB")
         self._iv = enc_cfg.get("iv", "0000000000000000")
+        self._input_fmt = enc_cfg.get("input_fmt", "base64")
 
     def encrypt(self, plaintext: str) -> str:
         if self.mode == "CBC":
@@ -181,13 +186,14 @@ class SM4Algorithm:
 
     def decrypt(self, ciphertext: str) -> str:
         if self.mode == "CBC":
-            return sm4_decrypt_cbc(ciphertext, self.key, self._iv, self.padding)
-        return sm4_decrypt_ecb(ciphertext, self.key, self.padding)
+            return sm4_decrypt_cbc(ciphertext, self.key, self._iv, self.padding, self._input_fmt)
+        return sm4_decrypt_ecb(ciphertext, self.key, self.padding, self._input_fmt)
 
 
 class XORAlgorithm:
     def __init__(self, enc_cfg: dict):
         self.key = enc_cfg["key"].encode("utf-8")
+        self._input_fmt = enc_cfg.get("input_fmt", "base64")
 
     def _xor(self, data: bytes) -> bytes:
         return bytes(data[i] ^ self.key[i % len(self.key)] for i in range(len(data)))
@@ -196,7 +202,8 @@ class XORAlgorithm:
         return base64.b64encode(self._xor(plaintext.encode("utf-8"))).decode("utf-8")
 
     def decrypt(self, ciphertext: str) -> str:
-        return self._xor(base64.b64decode(ciphertext)).decode("utf-8")
+        raw = base64.b64decode(ciphertext) if self._input_fmt == "base64" else bytes.fromhex(ciphertext)
+        return self._xor(raw).decode("utf-8")
 
 
 class RSAAlgorithm:
@@ -261,3 +268,21 @@ class RSAAlgorithm:
             return True
         except (ValueError, TypeError):
             return False
+
+
+class SM2Algorithm:
+    """SM2 国密非对称（依赖 gmssl）."""
+
+    def __init__(self, enc_cfg: dict):
+        self.key = enc_cfg.get("key", "")
+        self.mode = enc_cfg.get("mode", "C1C3C2")
+        if not self.key:
+            raise ValueError("SM2 需要提供 key（公钥/私钥 hex）")
+
+    def encrypt(self, plaintext: str) -> str:
+        from sdk.crypto.sm2 import sm2_encrypt
+        return sm2_encrypt(plaintext, self.key, mode=self.mode)
+
+    def decrypt(self, ciphertext: str) -> str:
+        from sdk.crypto.sm2 import sm2_decrypt
+        return sm2_decrypt(ciphertext, self.key, mode=self.mode)

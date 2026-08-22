@@ -1,4 +1,7 @@
-"""密桥全局主题 — 工位工具风；保留层级，去掉青绿/大圆角/阴影等模板感."""
+"""密桥全局主题 — 浅色冷灰工具台 / 深色灰蓝工作区。
+
+少渐变、少阴影、少色条卡片；主色实心，ghost 安静。
+"""
 
 from __future__ import annotations
 
@@ -7,68 +10,98 @@ from PyQt6.QtGui import QFont, QPalette, QColor
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication, QLabel, QWidget, QComboBox, QPushButton, QVBoxLayout, QFrame
 
-# 钢灰主色、小圆角；绿仅表示运行中。亮色为浅灰白面板。
 PALETTES: dict[str, dict[str, str]] = {
     "dark": {
-        "bg": "#1a1b1d",
-        "surface": "#222326",
-        "surface2": "#2b2c30",
-        "border": "#3a3b40",
-        "text": "#d0d1d4",
-        "text_dim": "#888a90",
-        "accent": "#9aa3ad",
-        "primary": "#8a939e",
-        "primary_hover": "#a4adb8",
-        "danger": "#c47a72",
-        "warn": "#c4a45a",
-        "ok": "#7fa07c",
-        "purple": "#8a8498",
-        "teal": "#7a9490",
-        "input_bg": "#141516",
-        "selection": "#343a44",
-        "code_bg": "#121314",
-        "code_fg": "#d0d1d4",
-        "tab_text": "#888a90",
-        "tab_text_selected": "#ececee",
-        "danger_hover_bg": "#3a2a28",
-        "primary_fg": "#141516",
-        "accent_fg": "#141516",
-        "focus": "#9aa3ad",
-        "badge_bg": "#2b2c30",
-        "pane": "#1c1d20",
+        "bg": "#0d1117",
+        "surface": "#161b22",
+        "surface2": "#21262d",
+        "border": "#30363d",
+        "text": "#e6edf3",
+        "text_dim": "#8b949e",
+        "accent": "#58a6ff",
+        "primary": "#388bfd",
+        "primary_hover": "#58a6ff",
+        "primary_pressed": "#1f6feb",
+        "primary_grad_a": "#4493f8",
+        "primary_grad_b": "#388bfd",
+        "danger": "#f85149",
+        "warn": "#d29922",
+        "ok": "#3fb950",
+        "purple": "#a371f7",
+        "teal": "#39d353",
+        "input_bg": "#0d1117",
+        "selection": "#1f3a5f",
+        "code_bg": "#0a0e14",
+        "code_fg": "#c9d1d9",
+        "tab_text": "#8b949e",
+        "tab_text_selected": "#e6edf3",
+        "danger_hover_bg": "#3d1214",
+        "primary_fg": "#ffffff",
+        "accent_fg": "#0d1117",
+        "focus": "#388bfd",
+        "badge_bg": "#21262d",
+        "pane": "#0d1117",
+        "overlay": "#010409",
+        "ghost_hover": "#21262d",
+        "tab_active_bg": "#161b22",
+        "tab_active_grad_a": "#161b22",
+        "tab_active_grad_b": "#161b22",
+        "accent_soft": "#13233a",
+        "sidebar_header": "#8b949e",
+        "chip_bg": "#21262d",
+        "input_focus_bg": "#0d1117",
+        "sidebar_bg": "#010409",
+        "line_soft": "#21262d",
+        "kpi_bg": "#161b22",
     },
     "light": {
-        "bg": "#f0f0f0",
+        # 浅色工具台：冷灰 + 蓝，避免 terracotta / 卡片墙
+        "bg": "#f0f2f5",
         "surface": "#ffffff",
-        "surface2": "#f5f5f5",
-        "border": "#d0d0d0",
-        "text": "#222222",
-        "text_dim": "#666666",
-        "accent": "#4f5966",
-        "primary": "#4f5966",
-        "primary_hover": "#3a4350",
-        "danger": "#a05048",
-        "warn": "#8a6e30",
-        "ok": "#3d6b45",
-        "purple": "#5c5670",
-        "teal": "#3d6a64",
+        "surface2": "#e8ebf0",
+        "border": "#d0d7de",
+        "text": "#1f2328",
+        "text_dim": "#656d76",
+        "accent": "#0969da",
+        "primary": "#1f2328",
+        "primary_hover": "#32383f",
+        "primary_pressed": "#0d1117",
+        "primary_grad_a": "#32383f",
+        "primary_grad_b": "#1f2328",
+        "danger": "#cf222e",
+        "warn": "#9a6700",
+        "ok": "#1a7f37",
+        "purple": "#8250df",
+        "teal": "#1a7f37",
         "input_bg": "#ffffff",
-        "selection": "#d0d6de",
-        "code_bg": "#1a1b1d",
-        "code_fg": "#d4d5d6",
-        "tab_text": "#666666",
-        "tab_text_selected": "#111111",
-        "danger_hover_bg": "#f5e8e6",
+        "selection": "#ddf4ff",
+        "code_bg": "#1f2328",
+        "code_fg": "#e6edf3",
+        "tab_text": "#656d76",
+        "tab_text_selected": "#1f2328",
+        "danger_hover_bg": "#ffebe9",
         "primary_fg": "#ffffff",
         "accent_fg": "#ffffff",
-        "focus": "#4f5966",
-        "badge_bg": "#e8e8ea",
-        "pane": "#ffffff",
+        "focus": "#0969da",
+        "badge_bg": "#eaeef2",
+        "pane": "#f0f2f5",
+        "overlay": "#e8ebf0",
+        "ghost_hover": "#eaeef2",
+        "tab_active_bg": "#ddf4ff",
+        "tab_active_grad_a": "#ddf4ff",
+        "tab_active_grad_b": "#ddf4ff",
+        "accent_soft": "#ddf4ff",
+        "sidebar_header": "#656d76",
+        "chip_bg": "#eaeef2",
+        "input_focus_bg": "#ffffff",
+        "sidebar_bg": "#f6f8fa",
+        "line_soft": "#e4e8ec",
+        "kpi_bg": "#fafbfc",
     },
 }
 
-_current_theme = "dark"
-C: dict[str, str] = dict(PALETTES["dark"])
+_current_theme = "light"
+C: dict[str, str] = dict(PALETTES["light"])
 THEME_QSS = ""
 LOG_COLORS: dict[str, str] = {}
 HTTP_LOG_COLORS: dict[str, str] = {}
@@ -79,53 +112,137 @@ def current_theme() -> str:
 
 
 def build_theme_qss(c: dict[str, str]) -> str:
-    r = "4px"
+    # 产品风：10px 圆角；侧栏更深
+    r = "10px"
     pane = c.get("pane", c["surface"])
+    sidebar_bg = c.get("sidebar_bg", c["surface"])
     return f"""
 QWidget {{
     background-color: {c['bg']};
     color: {c['text']};
-    font-family: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
-    font-size: 12px;
+    font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+    font-size: 12.5px;
 }}
 QMainWindow {{ background-color: {c['bg']}; }}
+QDialog {{
+    background-color: {c['surface']};
+    border: 1px solid {c['border']};
+    border-radius: 10px;
+}}
+QToolTip {{
+    background-color: {c['surface2']};
+    color: {c['text']};
+    border: 1px solid {c['border']};
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+}}
+QMessageBox {{
+    background-color: {c['surface']};
+}}
+QMessageBox QLabel {{
+    color: {c['text']};
+    font-size: 13px;
+}}
 
 #sidebar {{
-    background-color: {c['surface']};
+    background-color: {sidebar_bg};
     border-right: 1px solid {c['border']};
+}}
+#sidebarSection {{
+    color: {c['text_dim']};
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    background: transparent;
+    padding: 2px 2px 0 2px;
+}}
+#proxyRail {{
+    background-color: {c['surface']};
+    border: 1px solid {c.get('line_soft', c['border'])};
+    border-radius: 10px;
+}}
+#proxyStatusText {{
+    font-size: 12.5px;
+    font-weight: 600;
+    background: transparent;
+}}
+#proxyFieldLabel {{
+    color: {c['text_dim']};
+    font-size: 11px;
+    font-weight: 500;
+    background: transparent;
+}}
+#proxyCertHint {{
+    font-size: 11px;
+    background: transparent;
 }}
 #sidebar QGroupBox {{
     background-color: transparent;
     border: none;
-    border-top: 1px solid {c['border']};
+    border-top: 1px solid {c.get('line_soft', c['border'])};
     border-radius: 0;
-    margin-top: 10px;
-    padding: 12px 2px 6px 2px;
+    margin-top: 6px;
+    padding: 14px 2px 8px 2px;
     font-weight: 600;
-    font-size: 10px;
+    font-size: 11px;
     color: {c['text_dim']};
 }}
 #sidebar QGroupBox::title {{
     subcontrol-origin: margin;
     subcontrol-position: top left;
-    left: 0;
-    padding: 0 0 6px 0;
+    left: 2px;
+    padding: 0;
     color: {c['text_dim']};
     font-weight: 600;
+    font-size: 11px;
+    letter-spacing: 0.2px;
+    background-color: transparent;
 }}
 #sidebar QPushButton {{
-    min-height: 26px;
+    min-height: 28px;
     padding: 4px 10px;
-    border-radius: {r};
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 12px;
+}}
+#sidebar QPushButton[variant="primary"],
+#sidebar QPushButton[variant="danger"],
+#sidebar QPushButton[variant="danger_fill"] {{
+    min-width: 0;
 }}
 #sidebar QComboBox, #sidebar QSpinBox {{
-    min-height: 24px;
-    padding: 3px 6px;
-    border-radius: {r};
+    min-height: 26px;
+    padding: 2px 6px;
+    border-radius: 5px;
+    background-color: {c['input_bg']};
+    border: 1px solid {c['border']};
+    font-size: 12px;
+}}
+#sidebarPortLabel {{
+    min-width: 28px;
+    color: {c['text_dim']};
+    background: transparent;
+    font-size: 12px;
+}}
+#statusDot {{
+    min-width: 8px;
+    max-width: 8px;
+    min-height: 8px;
+    max-height: 8px;
+    border-radius: 4px;
+    background: {c['text_dim']};
+    border: none;
+}}
+#statusDot[running="true"] {{
+    background: {c['ok']};
+}}
+#statusDot[running="false"] {{
+    background: {c['text_dim']};
 }}
 #workspacePane {{
     background-color: {pane};
-    border: 1px solid {c['border']};
+    border: none;
     border-radius: 0;
 }}
 #appTitle {{
@@ -143,43 +260,50 @@ QMainWindow {{ background-color: {c['bg']}; }}
     border: none;
     border-radius: 0;
     margin: 0;
-    padding-bottom: 10px;
-    border-bottom: 1px solid {c['border']};
+    padding: 4px 0 6px 0;
+}}
+#sidebarBrandLogoWell {{
+    background: transparent;
+    border: none;
 }}
 #sidebarBrandLogo {{
-    background: {c['surface2']};
+    background: {c.get('accent_soft', c.get('surface2', c['surface']))};
     border: 1px solid {c['border']};
-    border-radius: {r};
+    border-radius: 8px;
     padding: 2px;
 }}
 #sidebarBrandNameCn {{
     font-size: 15px;
-    font-weight: 700;
-    
+    font-weight: 800;
+    letter-spacing: 0.2px;
     color: {c['text']};
     background: transparent;
 }}
 #sidebarBrandNameEn {{
-    font-size: 10px;
-    font-weight: 500;
+    font-size: 12px;
+    font-weight: 600;
+    color: {c.get('accent', c['primary'])};
+    background: transparent;
+}}
+#sidebarBrandAuthor {{
+    font-size: 11px;
+    font-weight: 600;
     color: {c['text_dim']};
     background: transparent;
 }}
 #sidebarBrandVersion {{
-    font-size: 9px;
+    font-size: 10px;
     font-weight: 600;
-    color: {c['accent']};
-    background: {c['badge_bg']};
-    border: 1px solid {c['border']};
-    border-radius: 4px;
-    padding: 1px 6px;
+    color: {c['text_dim']};
+    background: transparent;
+    border: none;
+    padding: 0;
 }}
 #sidebarBrandSub {{
     font-size: 10px;
     font-weight: 400;
     color: {c['text_dim']};
     background: transparent;
-    padding-top: 1px;
 }}
 #sidebarBrandDivider {{
     background-color: {c['border']};
@@ -190,7 +314,7 @@ QMainWindow {{ background-color: {c['bg']}; }}
     font-size: 9px;
     color: {c['text_dim']};
     background: transparent;
-    padding-top: 4px;
+    padding-top: 6px;
 }}
 #sidebarBrandCreditOrg {{
     font-size: 9px;
@@ -214,24 +338,189 @@ QMainWindow {{ background-color: {c['bg']}; }}
     color: {c['text_dim']};
     background: transparent;
 }}
-#aiReadyChip {{
-    border-radius: {r};
-    padding: 2px 8px;
-    font-size: 11px;
+#aiLabPage {{
+    background: transparent;
 }}
-#aiNextHint {{
+#aiPane {{
     background: {c['surface']};
     border: 1px solid {c['border']};
-    border-left: 2px solid {c['border']};
-    border-radius: {r};
-    padding: 10px 12px;
+    border-radius: 14px;
+}}
+#aiToolbar {{
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid {c['border']};
+    padding-bottom: 8px;
+}}
+#aiCaptureBar {{
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid {c['border']};
+    border-radius: 0;
+    min-height: 40px;
+    padding-bottom: 8px;
+}}
+#aiActionBar, #aiComposer {{
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    min-height: 0;
+}}
+#aiComposer {{
+    border-top: 1px solid {c['border']};
+    padding-top: 8px;
+}}
+#aiReadyChip {{
+    border-radius: 999px;
+    padding: 5px 12px;
+    font-size: 11px;
+    font-weight: 600;
+    background: {c['accent_soft']};
+    border: 1px solid {c['border']};
+    color: {c['accent']};
+}}
+#aiNextHint {{
+    background: transparent;
+    border: none;
+    padding: 0;
     color: {c['text_dim']};
+    font-size: 12px;
+}}
+#aiTargetPanel {{
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    min-height: 0;
+}}
+#aiTargetPanelTitle {{
+    font-size: 11px;
+    font-weight: 700;
+    color: {c['text_dim']};
+    background: transparent;
+    letter-spacing: 0.4px;
+}}
+#aiTargetStatus {{
+    font-size: 12px;
+    color: {c['text_dim']};
+    background: transparent;
+    border: none;
+    padding: 0;
+}}
+#aiTargetStatus[ready="true"] {{
+    color: {c['ok']};
+}}
+#aiAgentToolbar {{
+    background: transparent;
 }}
 #aiHeroBtn {{
+    font-size: 12px;
+    font-weight: 600;
+    min-height: 28px;
+    border-radius: {r};
+}}
+#fieldTargetDialog #ftDialogTitle {{
     font-size: 13px;
     font-weight: 600;
-    min-height: 36px;
-    border-radius: {r};
+    color: {c['text']};
+    background: transparent;
+}}
+#fieldTargetDialog #ftDialogSub {{
+    font-size: 11px;
+    color: {c['text_dim']};
+    background: transparent;
+}}
+#fieldTargetDialog #ftStatusChip {{
+    font-size: 10px;
+    color: {c['text']};
+    background: {c['surface2']};
+    border: 1px solid {c['border']};
+    border-radius: 8px;
+    padding: 1px 6px;
+}}
+#fieldTargetDialog #ftPanel {{
+    background: {c['surface']};
+    border: 1px solid {c['border']};
+    border-radius: 4px;
+}}
+#fieldTargetDialog #ftPanelTitle {{
+    font-size: 11px;
+    font-weight: 600;
+    background: transparent;
+}}
+#fieldTargetDialog #ftStepBadge {{
+    font-size: 10px;
+    font-weight: 700;
+    font-family: "Cascadia Code", "Consolas", monospace;
+    color: {c['primary_fg']};
+    background: {c['primary']};
+    border-radius: 8px;
+}}
+#fieldTargetDialog #ftSegBar {{
+    background: {c['surface2']};
+    border: 1px solid {c['border']};
+    border-radius: 4px;
+}}
+#fieldTargetDialog QPushButton#ftSegBtn {{
+    background: transparent;
+    border: none;
+    border-radius: 3px;
+    color: {c['text_dim']};
+    font-size: 11px;
+    font-weight: 500;
+    padding: 2px 6px;
+    min-height: 0;
+}}
+#fieldTargetDialog QPushButton#ftSegBtn:hover {{
+    color: {c['text']};
+    background: {c['bg']};
+}}
+#fieldTargetDialog QPushButton#ftSegBtn:checked {{
+    color: {c['primary_fg']};
+    background: {c['primary']};
+    font-weight: 600;
+}}
+#fieldTargetDialog #ftFlowList {{
+    background: {c['input_bg']};
+    border: 1px solid {c['border']};
+    border-radius: 3px;
+    padding: 0;
+    font-size: 11px;
+}}
+#fieldTargetDialog #ftFlowList::item {{
+    padding: 3px 6px;
+    border-radius: 2px;
+    margin: 0;
+}}
+#fieldTargetDialog #ftFlowList::item:selected {{
+    background: {c['selection']};
+    color: {c['text']};
+}}
+#fieldTargetDialog #ftFieldTree {{
+    background: {c['input_bg']};
+    border: 1px solid {c['border']};
+    border-radius: 3px;
+    font-size: 11px;
+}}
+#fieldTargetDialog #ftFieldTree::item {{
+    padding: 1px 0;
+}}
+#fieldTargetDialog #ftPickedList {{
+    background: {c['input_bg']};
+    border: 1px solid {c['border']};
+    border-radius: 3px;
+    font-size: 11px;
+}}
+#fieldTargetDialog #ftPickedList::item {{
+    padding: 2px 6px;
+    border-radius: 2px;
+}}
+#fieldTargetDialog #ftEmptyHint {{
+    color: {c['warn']};
+    background: {c['surface2']};
+    border: 1px solid {c['border']};
+    border-radius: 3px;
+    padding: 4px 8px;
+    font-size: 11px;
 }}
 QLabel[muted="true"] {{
     color: {c['text_dim']};
@@ -244,53 +533,100 @@ QLabel[status="stopped"] {{ color: {c['text_dim']}; }}
 QGroupBox {{
     background-color: {c['surface']};
     border: 1px solid {c['border']};
-    border-radius: {r};
-    margin-top: 12px;
-    padding: 14px 10px 10px 10px;
+    border-radius: 8px;
+    margin-top: 14px;
+    padding: 16px 14px 14px 14px;
     font-weight: 600;
 }}
 QGroupBox::title {{
     subcontrol-origin: margin;
     subcontrol-position: top left;
-    left: 8px;
-    padding: 0 6px;
+    left: 12px;
+    padding: 0 8px;
     color: {c['text_dim']};
+    background-color: {c['surface']};
+    font-weight: 700;
+    font-size: 11px;
+    letter-spacing: 0.4px;
+}}
+#cryptoWorkbench {{
+    background-color: transparent;
+}}
+#cryptoSidePanel {{
+    background-color: {c['surface']};
+    border: none;
+    border-right: 1px solid {c['border']};
+    border-radius: 0;
+}}
+#cryptoSidePanel QLabel {{
+    background: transparent;
+}}
+#cryptoPanelTitle {{
+    font-size: 12px;
+    font-weight: 600;
+    color: {c['text']};
+    background: transparent;
+    padding: 0 0 2px 0;
+}}
+#cryptoFieldLabel {{
+    font-size: 11px;
+    font-weight: 500;
+    color: {c['text_dim']};
+    background: transparent;
+    padding: 0 0 2px 0;
+}}
+#analyzerEmptyHint {{
+    color: {c['text_dim']};
+    font-size: 12px;
+    background: transparent;
+    padding: 20px 12px;
 }}
 
 QLineEdit, QSpinBox, QComboBox, QTextEdit, QPlainTextEdit {{
     background-color: {c['input_bg']};
     border: 1px solid {c['border']};
     border-radius: {r};
-    padding: 6px 10px;
+    padding: 7px 10px;
     color: {c['text']};
     selection-background-color: {c['selection']};
+    min-height: 20px;
 }}
 QLineEdit:focus, QSpinBox:focus, QComboBox:focus, QTextEdit:focus, QPlainTextEdit:focus {{
     border: 1px solid {c['focus']};
+    background-color: {c['input_focus_bg']};
 }}
-QComboBox {{ padding-right: 24px; min-height: 22px; }}
+QComboBox {{ padding-right: 22px; min-height: 26px; max-height: 26px; }}
 QComboBox::drop-down {{
     subcontrol-origin: padding;
     subcontrol-position: top right;
-    width: 22px;
+    width: 24px;
     border-left: 1px solid {c['border']};
     background-color: {c['surface2']};
     border-top-right-radius: {r};
     border-bottom-right-radius: {r};
 }}
+QComboBox::drop-down:hover {{ background-color: {c['primary']}; }}
 QComboBox::down-arrow {{
     width: 0; height: 0;
     border-left: 3px solid transparent;
     border-right: 3px solid transparent;
     border-top: 4px solid {c['text_dim']};
 }}
+QComboBox::drop-down:hover::down-arrow {{ border-top-color: {c['primary_fg']}; }}
 QComboBox QAbstractItemView {{
     background-color: {c['surface2']};
     border: 1px solid {c['border']};
+    border-radius: {r};
+    padding: 4px;
     selection-background-color: {c['selection']};
     selection-color: {c['text']};
     outline: none;
     max-height: 320px;
+}}
+QComboBox QAbstractItemView::item {{
+    padding: 4px 8px;
+    border-radius: 4px;
+    margin: 1px;
 }}
 QSpinBox {{ padding-right: 18px; }}
 QSpinBox::up-button, QSpinBox::down-button {{
@@ -335,24 +671,90 @@ QSpinBox::down-arrow {{
     color: {c['code_fg']};
     padding: 8px;
 }}
-
-QPushButton {{
-    background-color: {c['surface']};
+#monoField, QPlainTextEdit#monoField, QTextEdit#monoField, QLineEdit#monoField {{
+    background-color: {c['code_bg']};
     border: 1px solid {c['border']};
     border-radius: {r};
-    padding: 6px 16px;
+    padding: 8px 10px;
+    font-family: "Cascadia Code", "Consolas", "Courier New", monospace;
+    font-size: 12px;
+    color: {c['code_fg']};
+    selection-background-color: {c['selection']};
+}}
+#monoField:focus, QPlainTextEdit#monoField:focus, QLineEdit#monoField:focus {{
+    border: 1px solid {c['focus']};
+}}
+QTabWidget#subTabs::pane {{
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    padding: 10px 8px 8px 8px;
+}}
+QTabWidget#subTabs QTabBar {{
+    background: transparent;
+    border-bottom: 1px solid {c['border']};
+}}
+QTabWidget#subTabs {{
+    background: transparent;
+}}
+QTabWidget#subTabs QTabBar::tab {{
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    padding: 4px 8px 3px 8px;
+    margin: 0;
+    color: {c['tab_text']};
+    min-height: 16px;
+    font-size: 12px;
+}}
+QTabWidget#subTabs QTabBar::tab:selected {{
+    background: transparent;
+    border-bottom: 2px solid {c['primary']};
+    color: {c['tab_text_selected']};
+    font-weight: 600;
+}}
+QTabWidget#subTabs QTabBar::tab:hover:!selected {{
+    background: {c['surface2']};
+    color: {c['tab_text_selected']};
+}}
+#aiPane QTabWidget#subTabs QTabBar {{
+    background: transparent;
+}}
+#aiPane QTabWidget#subTabs::pane {{
+    padding: 8px 0 0 0;
+}}
+
+/* 按钮体系：紧凑但不裁切中文；不用死锁 max-height */
+QPushButton {{
+    background-color: {c['surface2']};
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 4px 10px;
     color: {c['text']};
-    min-height: 24px;
+    min-height: 26px;
+    min-width: 0;
+    font-weight: 500;
+    font-size: 12px;
 }}
 QPushButton:hover {{
-    background-color: {c['surface2']};
-    border-color: {c['text_dim']};
+    background-color: {c['ghost_hover']};
 }}
 QPushButton:pressed {{ background-color: {c['input_bg']}; }}
 QPushButton:disabled {{
     color: {c['text_dim']};
-    background-color: {c['surface2']};
-    border-color: {c['border']};
+    background-color: {c['surface']};
+    border-color: transparent;
+}}
+QPushButton[btnSize="sm"] {{
+    min-height: 24px;
+    padding: 2px 8px;
+    font-size: 12px;
+}}
+QPushButton[btnSize="lg"] {{
+    min-height: 30px;
+    padding: 5px 12px;
+    font-weight: 600;
 }}
 QPushButton[variant="primary"] {{
     background-color: {c['primary']};
@@ -361,41 +763,45 @@ QPushButton[variant="primary"] {{
     font-weight: 600;
 }}
 QPushButton[variant="primary"]:hover {{
-    background-color: {c['primary_hover']};
+    background: {c['primary_hover']};
     border-color: {c['primary_hover']};
     color: {c['primary_fg']};
 }}
 QPushButton[variant="primary"]:pressed {{
-    background-color: {c['surface2']};
-    border-color: {c['text_dim']};
-    color: {c['text']};
+    background: {c['primary_pressed']};
+    border-color: {c['primary_pressed']};
+    color: {c['primary_fg']};
 }}
+/* accent：轻描边，不当成第二主色 */
 QPushButton[variant="accent"] {{
-    background-color: {c['accent']};
-    border: 1px solid {c['accent']};
-    color: {c['accent_fg']};
-    font-weight: 600;
+    background-color: transparent;
+    border: 1px solid {c['border']};
+    color: {c['text']};
+    font-weight: 500;
 }}
 QPushButton[variant="accent"]:hover {{
-    background-color: {c['primary_hover']};
-    border-color: {c['primary_hover']};
-    color: {c['accent_fg']};
+    border-color: {c['accent']};
+    background-color: {c['accent_soft']};
+    color: {c['accent']};
 }}
+/* warn 降级为 ghost，避免工具栏变彩虹 */
 QPushButton[variant="warn"] {{
-    background-color: {c['surface']};
-    border: 1px solid {c['warn']};
-    color: {c['warn']};
+    background: transparent;
+    border: 1px solid transparent;
+    color: {c['text_dim']};
 }}
 QPushButton[variant="warn"]:hover {{
-    background-color: {c['surface2']};
+    color: {c['text']};
+    background: {c['ghost_hover']};
 }}
 QPushButton[variant="danger"] {{
     background-color: transparent;
-    border: 1px solid {c['danger']};
+    border: 1px solid {c['border']};
     color: {c['danger']};
 }}
 QPushButton[variant="danger"]:hover {{
     background-color: {c['danger_hover_bg']};
+    border-color: {c['danger']};
 }}
 QPushButton[variant="danger_fill"] {{
     background-color: {c['danger']};
@@ -404,8 +810,8 @@ QPushButton[variant="danger_fill"] {{
     font-weight: 600;
 }}
 QPushButton[variant="danger_fill"]:hover {{
-    background-color: #dc5252;
-    border-color: #dc5252;
+    background-color: #e05a62;
+    border-color: #e05a62;
 }}
 QPushButton[variant="danger_fill"]:disabled {{
     background-color: {c['surface2']};
@@ -414,35 +820,40 @@ QPushButton[variant="danger_fill"]:disabled {{
 }}
 QPushButton[variant="ghost"] {{
     background: transparent;
-    border-color: {c['border']};
+    border: 1px solid transparent;
     color: {c['text_dim']};
 }}
 QPushButton[variant="ghost"]:hover {{
     color: {c['text']};
-    background: {c['surface2']};
-    border-color: {c['text_dim']};
+    background: {c['ghost_hover']};
+    border-color: transparent;
 }}
 
 QTabWidget::pane {{
-    border: 1px solid {c['border']};
-    border-radius: {r};
-    background: {pane};
+    border: none;
+    border-radius: 0;
+    background: transparent;
     top: -1px;
-    padding: 8px;
+    padding: 8px 0 0 0;
+}}
+QTabBar {{
+    background: {c['surface']};
+    border-bottom: 1px solid {c['border']};
 }}
 QTabBar::tab {{
     background: transparent;
     border: none;
     border-bottom: 2px solid transparent;
     border-radius: 0;
-    padding: 8px 14px;
+    padding: 5px 10px 4px 10px;
     margin: 0 1px;
     color: {c['tab_text']};
-    min-height: 18px;
+    min-height: 15px;
+    font-size: 12px;
 }}
 QTabBar::tab:selected {{
     background: transparent;
-    border-bottom: 2px solid {c['text']};
+    border-bottom: 2px solid {c['primary']};
     color: {c['tab_text_selected']};
     font-weight: 600;
 }}
@@ -450,56 +861,76 @@ QTabBar::tab:hover:!selected {{
     color: {c['tab_text_selected']};
     background: {c['surface2']};
 }}
+QTabBar::scroller {{
+    width: 20px;
+    background: {c['surface']};
+    border: none;
+}}
+QTabBar QToolButton {{
+    background: {c['surface']};
+    border: 1px solid {c['border']};
+    border-radius: {r};
+    padding: 2px;
+}}
+QTabBar QToolButton:hover {{
+    background: {c['surface2']};
+}}
 QTabWidget#mainTabs::pane {{
     border: none;
     border-radius: 0;
     background: transparent;
-    padding: 12px 14px 14px 14px;
-}}
-QTabWidget#mainTabs QTabBar {{
-    background: transparent;
-    border-bottom: 1px solid {c['border']};
+    padding: 10px 12px 12px 12px;
 }}
 QTabWidget#mainTabs {{
     background: transparent;
+}}
+QTabWidget#mainTabs QTabBar {{
+    background: {c['surface']};
+    border: none;
+    border-bottom: 1px solid {c['border']};
+    min-height: 38px;
+    padding-left: 8px;
 }}
 QTabWidget#mainTabs QTabBar::tab {{
     background: transparent;
     border: none;
     border-bottom: 2px solid transparent;
     border-radius: 0;
-    padding: 11px 16px 9px 16px;
-    margin: 0;
+    padding: 7px 12px 6px 12px;
+    margin: 0 1px;
     color: {c['tab_text']};
     min-height: 18px;
+    font-weight: 600;
+    font-size: 12px;
 }}
 QTabWidget#mainTabs QTabBar::tab:selected {{
     background: transparent;
     border: none;
-    border-bottom: 2px solid {c['text']};
+    border-bottom: 2px solid {c['primary']};
     color: {c['tab_text_selected']};
-    font-weight: 600;
+    font-weight: 700;
 }}
 QTabWidget#mainTabs QTabBar::tab:hover:!selected {{
-    background: transparent;
+    background: {c['ghost_hover']};
     color: {c['tab_text_selected']};
+    border-radius: 6px 6px 0 0;
 }}
 
 QTreeWidget, QListWidget, QTableWidget {{
     background-color: {c['input_bg']};
-    border: 1px solid {c['border']};
+    border: none;
     border-radius: {r};
     outline: none;
     alternate-background-color: {c['surface']};
     padding: 2px;
 }}
 QTreeWidget::item, QListWidget::item {{
-    padding: 5px 8px;
-    border-radius: {r};
-    margin: 1px 2px;
+    padding: 3px 6px;
+    border-radius: 4px;
+    margin: 0px 1px;
 }}
 QTreeWidget::item:hover, QListWidget::item:hover {{
-    background-color: {c['surface2']};
+    background-color: {c['ghost_hover']};
 }}
 QTreeWidget::item:selected, QListWidget::item:selected {{
     background-color: {c['selection']};
@@ -542,9 +973,19 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
 QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{ background: transparent; }}
 
 QSplitter::handle {{ background: {c['border']}; }}
-QSplitter::handle:hover {{ background: {c['text_dim']}; }}
+QSplitter::handle:hover {{ background: {c['primary']}; }}
 QSplitter::handle:horizontal {{ width: 1px; margin: 0; }}
 QSplitter::handle:vertical {{ height: 1px; margin: 0; }}
+#cryptoWorkbench QSplitter::handle:horizontal {{
+    width: 1px;
+    margin: 0;
+    background: {c['border']};
+}}
+#cryptoWorkbench QSplitter::handle:vertical {{
+    height: 1px;
+    margin: 0;
+    background: {c['border']};
+}}
 
 QMenu {{
     background: {c['surface2']};
@@ -587,11 +1028,14 @@ QToolButton::menu-indicator {{ image: none; width: 0; }}
 QCheckBox {{
     spacing: 6px;
     background: transparent;
+    min-height: 22px;
+    color: {c['text']};
+    font-size: 12px;
 }}
 QCheckBox::indicator {{
-    width: 15px;
-    height: 15px;
-    border-radius: 4px;
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
     border: 1px solid {c['border']};
     background: {c['input_bg']};
 }}
@@ -603,19 +1047,98 @@ QCheckBox::indicator:hover {{
     border-color: {c['accent']};
 }}
 
-QPushButton[sidebarAux="true"] {{
-    padding: 2px 8px;
-    min-height: 18px;
-    font-size: 11px;
+QPushButton[sidebarAux="true"],
+QToolButton[sidebarAux="true"] {{
+    padding: 3px 8px;
+    min-height: 24px;
+    font-size: 12px;
     background: transparent;
-    border-color: {c['border']};
-    color: {c['text_dim']};
-}}
-QPushButton[sidebarAux="true"]:hover {{
+    border: 1px solid transparent;
+    border-radius: 5px;
     color: {c['text']};
-    background: {c['surface2']};
-    border-color: {c['text_dim']};
 }}
+QPushButton[sidebarAux="true"]:hover,
+QToolButton[sidebarAux="true"]:hover {{
+    color: {c['text']};
+    background: {c['ghost_hover']};
+    border-color: {c['border']};
+}}
+/* 仅图标小钮：固定方块 */
+QPushButton[sidebarAux="true"][iconOnly="true"],
+QToolButton[sidebarAux="true"][iconOnly="true"] {{
+    min-width: 24px;
+    max-width: 24px;
+    min-height: 24px;
+    max-height: 24px;
+    padding: 2px;
+}}
+
+/* ── 企业版：顶部应用工具栏 ───────────────────────── */
+#appToolbar {{
+    background-color: {c['surface']};
+    border-bottom: 1px solid {c['border']};
+}}
+#appToolbarBrandName {{
+    font-size: 14px;
+    font-weight: 700;
+    color: {c['text']};
+    background: transparent;
+}}
+#appToolbarBrandSub {{
+    font-size: 10px;
+    color: {c['text_dim']};
+    background: transparent;
+}}
+#appToolbarChip {{
+    background: {c['chip_bg']};
+    border: 1px solid {c['border']};
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-size: 11px;
+    color: {c['text']};
+}}
+#appToolbarChipLabel {{
+    font-size: 10px;
+    color: {c['text_dim']};
+    background: transparent;
+    padding-right: 4px;
+}}
+#appToolbarBtn {{
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 5px 12px;
+    min-height: 20px;
+    color: {c['text']};
+    font-size: 12px;
+}}
+#appToolbarBtn:hover {{ background: {c['ghost_hover']}; border-color: {c['border']}; }}
+#appToolbarBtn[active="true"] {{ color: {c['primary']}; font-weight: 600; }}
+#appToolbarSep {{
+    background-color: {c['border']};
+    max-width: 1px;
+    min-height: 22px;
+}}
+
+/* ── 企业版：底部状态栏 ───────────────────────────── */
+QStatusBar {{
+    background-color: {c['surface']};
+    border-top: 1px solid {c['border']};
+    color: {c['text_dim']};
+    font-size: 11px;
+}}
+QStatusBar::item {{ border: none; }}
+#statusBarSegment {{
+    background: transparent;
+    border: none;
+    padding: 3px 12px;
+    color: {c['text_dim']};
+    font-size: 11px;
+}}
+#statusBarSegment QLabel {{ background: transparent; }}
+#statusBarProjectName {{ color: {c['text']}; font-weight: 600; }}
+#statusBarValue {{ color: {c['text']}; }}
+#statusBarVersion {{ color: {c['text_dim']}; font-size: 10px; }}
 
 QFrame[card="true"] {{
     background: {c['surface']};
@@ -629,12 +1152,13 @@ QLabel[stepTitle="true"] {{
     font-size: 12px;
 }}
 QPushButton[compact="true"] {{
-    padding: 1px 5px;
-    min-height: 14px;
+    padding: 0;
+    min-height: 22px;
+    max-height: 22px;
     min-width: 22px;
-    max-width: 26px;
+    max-width: 22px;
     font-size: 11px;
-    border-radius: {r};
+    border-radius: 5px;
 }}
 
 QLabel[feedbackBox="true"] {{
@@ -646,97 +1170,123 @@ QLabel[feedbackBox="true"] {{
 }}
 QLabel[feedbackKind="error"] {{ color: {c['danger']}; border-color: {c['danger']}; }}
 
-#homeHeroTitle {{
-    font-size: 22px;
-    font-weight: 700;
+#homePage, #homeBody {{
     background: transparent;
 }}
-#homeHeroSub {{
-    font-size: 13px;
+#homeHead {{
+    background: transparent;
+    border: none;
+}}
+#homeTitle {{
+    font-size: 20px;
+    font-weight: 700;
+    color: {c['text']};
+    background: transparent;
+    letter-spacing: -0.3px;
+}}
+#homeSub {{
+    font-size: 12.5px;
     color: {c['text_dim']};
     background: transparent;
 }}
-#homeSectionTitle {{
-    font-size: 11px;
-    font-weight: 700;
-    color: {c['text_dim']};
-    background: transparent;
-    padding-top: 4px;
-}}
-#homeStatStrip {{
+#homeStatusStrip {{
     background: {c['surface']};
-    border: 1px solid {c['border']};
-    border-radius: {r};
+    border: 1px solid {c.get('line_soft', c['border'])};
+    border-radius: 8px;
 }}
-#homeStatSep {{
-    background-color: {c['border']};
+#homeStatusCell {{
+    background: transparent;
+    border: none;
+}}
+#homeStatusSep {{
+    background-color: {c.get('line_soft', c['border'])};
+    border: none;
     max-width: 1px;
-    border: none;
 }}
-#homeStatCard {{
-    background: transparent;
-    border: none;
-    border-radius: 0;
-}}
-#homeNavCard {{
-    background: {c['surface']};
-    border: 1px solid {c['border']};
-    border-radius: {r};
-}}
-#homeNavCard:hover {{
-    border-color: {c['text_dim']};
-    background: {c['surface2']};
-}}
-#homeWorkflow {{
-    background: transparent;
-    border: none;
-    padding: 0;
-}}
-#homeWorkflowRow {{
-    background: transparent;
-    border: none;
-}}
-#homeStatValue {{
-    font-size: 12px;
-    font-weight: 600;
+#homeMetaLabel {{
+    font-size: 11px;
+    font-weight: 500;
+    color: {c['text_dim']};
     background: transparent;
 }}
-#homeCardTitle {{
+#homeMetaValue {{
     font-size: 13px;
     font-weight: 600;
+    color: {c['text']};
     background: transparent;
 }}
-#homeStepBadge {{
-    background: {c['badge_bg']};
-    border: 1px solid {c['border']};
-    border-radius: {r};
+#homeMetaValue[state="running"] {{
+    color: {c['ok']};
+}}
+#homeMetaValue[state="stopped"] {{
     color: {c['text_dim']};
-    font-weight: 700;
+}}
+#homeStepsBar {{
+    background: transparent;
+    border: none;
+}}
+#homeStepCard {{
+    background: {c['surface']};
+    border: 1px solid {c.get('line_soft', c['border'])};
+    border-radius: 8px;
+}}
+#homeStepNum {{
+    background: {c.get('badge_bg', c['surface2'])};
+    border: none;
+    border-radius: 6px;
+    color: {c['text_dim']};
     font-size: 11px;
-    font-family: "Cascadia Code", "Consolas", monospace;
-    padding: 2px 0;
+    font-weight: 700;
+}}
+#homeStepTitle {{
+    font-size: 12.5px;
+    font-weight: 600;
+    color: {c['text']};
+    background: transparent;
+}}
+#homeStepDesc {{
+    font-size: 11px;
+    color: {c['text_dim']};
+    background: transparent;
+}}
+#homeTopoPanel {{
+    background: {c['surface']};
+    border: 1px solid {c.get('line_soft', c['border'])};
+    border-radius: 10px;
+}}
+#homeCaption {{
+    font-size: 11px;
+    font-weight: 700;
+    color: {c['text_dim']};
+    background: transparent;
+    letter-spacing: 0.3px;
+}}
+#homeTopoPath {{
+    font-size: 11.5px;
+    color: {c['text_dim']};
+    background: transparent;
 }}
 #homeTopology {{
-    background: {c['surface']};
-    border: 1px solid {c['border']};
-    border-radius: {r};
-    padding: 12px 14px;
+    background: {c.get('badge_bg', c['surface2'])};
+    border: 1px solid {c.get('line_soft', c['border'])};
+    border-radius: 8px;
+    padding: 8px;
 }}
 #homeEmptyHint {{
     background: transparent;
     border: none;
-    border-left: 3px solid {c['warn']};
-    border-radius: 0;
-    padding: 4px 0 4px 10px;
+    padding: 4px 0;
     color: {c['text_dim']};
 }}
 #projectEmptyHint {{
-    color: {c['warn']};
+    color: {c['text_dim']};
     font-size: 11px;
     background: transparent;
 }}
 QDialogButtonBox QPushButton {{
-    min-width: 76px;
+    min-width: 64px;
+    min-height: 26px;
+    max-height: 26px;
 }}
 """
 
@@ -908,9 +1458,28 @@ class CollapsibleBox(QFrame):
         return self._collapsed
 
 
-def style_button(btn, variant: str = "default") -> None:
-    """variant: default | primary | danger | danger_fill | accent | warn | ghost"""
+def style_button(btn, variant: str = "default", *, size: str = "md") -> None:
+    """统一按钮外观。
+
+    variant:
+      - primary: 本栏唯一主操作（启动/保存/解析）
+      - default: 次要实心灰底
+      - accent: 轻描边次强调（少用）
+      - ghost / warn: 弱操作（撤销/清空/复制）
+      - danger / danger_fill: 停止/删除
+    size: sm(26) | md(30) | lg(34)
+    """
+    # 旧 warn 与 ghost 同级，避免工具栏变色块墙
+    if variant == "warn":
+        variant = "ghost"
     btn.setProperty("variant", "" if variant == "default" else variant)
+    btn.setProperty("btnSize", size if size in ("sm", "md", "lg") else "md")
+    # 清掉各处散落的 FixedHeight，交给 QSS 管齐
+    try:
+        btn.setMinimumHeight(0)
+        btn.setMaximumHeight(16777215)
+    except Exception:
+        pass
     _repolish(btn)
 
 
@@ -933,37 +1502,56 @@ def setup_code_editor(widget) -> None:
     attach_python_highlighter(widget)
 
 
+def setup_mono_field(widget) -> None:
+    """密文/明文等等宽输入区，随主题切换，不加语法高亮。"""
+    widget.setObjectName("monoField")
+    widget.setStyleSheet("")
+
+
+def setup_sub_tabs(tab_widget) -> None:
+    """设置内页等二级 Tab — 不截断文字，过窄时出滚动箭头。"""
+    from PyQt6.QtCore import QSize
+    tab_widget.setObjectName("subTabs")
+    tab_widget.setDocumentMode(True)
+    tab_widget.setMovable(False)
+    tab_widget.setIconSize(QSize(14, 14))
+    bar = tab_widget.tabBar()
+    bar.setExpanding(False)
+    bar.setUsesScrollButtons(True)
+    bar.setDrawBase(False)
+    bar.setElideMode(Qt.TextElideMode.ElideNone)
+    bar.setIconSize(QSize(14, 14))
+    repolish_widget(tab_widget)
+
+
 def build_logo_header(parent_layout, icon_path: str | None = None) -> None:
-    """侧边栏品牌区 — 图标 + 名称一行，不搞徽章堆砌."""
+    """侧边栏品牌区 — 图标与标题略突出。"""
     from PyQt6.QtCore import Qt
     from PyQt6.QtGui import QPixmap
     from PyQt6.QtWidgets import QFrame, QHBoxLayout, QVBoxLayout, QLabel
     from core.icon_loader import MAIN_ICON
-    from core.brand import (
-        APP_NAME, APP_NAME_EN, APP_SUBTITLE, APP_VERSION,
-        APP_CREDIT_AUTHOR, APP_TAGLINE,
-    )
+    from core.brand import APP_NAME, APP_NAME_EN, APP_VERSION, APP_CREDIT_AUTHOR, APP_TAGLINE
 
     card = QFrame()
     card.setObjectName("sidebarBrandCard")
     repolish_widget(card)
 
     outer = QVBoxLayout(card)
-    outer.setContentsMargins(2, 2, 2, 8)
-    outer.setSpacing(4)
+    outer.setContentsMargins(2, 4, 2, 12)
+    outer.setSpacing(0)
 
     row = QHBoxLayout()
-    row.setSpacing(8)
+    row.setSpacing(10)
     row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
     logo = QLabel()
     logo.setObjectName("sidebarBrandLogo")
-    logo.setFixedSize(28, 28)
+    logo.setFixedSize(42, 42)
     logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
     img = icon_path or MAIN_ICON
     if img:
         pm = QPixmap(img).scaled(
-            28, 28, Qt.AspectRatioMode.KeepAspectRatio,
+            34, 34, Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
         if not pm.isNull():
@@ -971,22 +1559,20 @@ def build_logo_header(parent_layout, icon_path: str | None = None) -> None:
     row.addWidget(logo)
 
     text_col = QVBoxLayout()
-    text_col.setSpacing(0)
-    name_cn = QLabel(f"{APP_NAME}  {APP_NAME_EN}  {APP_VERSION}")
+    text_col.setSpacing(2)
+    name_cn = QLabel(f"{APP_NAME} {APP_NAME_EN} {APP_VERSION}")
     name_cn.setObjectName("sidebarBrandNameCn")
     text_col.addWidget(name_cn)
-    subtitle = QLabel(APP_SUBTITLE)
-    subtitle.setObjectName("sidebarBrandSub")
-    subtitle.setWordWrap(True)
-    text_col.addWidget(subtitle)
+    author = QLabel(f"作者：{APP_CREDIT_AUTHOR}")
+    author.setObjectName("sidebarBrandAuthor")
+    text_col.addWidget(author)
     row.addLayout(text_col, 1)
     outer.addLayout(row)
 
-    credit = QLabel(APP_TAGLINE)
-    credit.setObjectName("sidebarBrandCreditMuted")
-    credit.setWordWrap(True)
-    credit.setToolTip(f"作者：{APP_CREDIT_AUTHOR}")
-    outer.addWidget(credit)
+    tip = f"{APP_NAME} {APP_NAME_EN} {APP_VERSION}\n{APP_TAGLINE}"
+    name_cn.setToolTip(tip)
+    author.setToolTip(tip)
+    logo.setToolTip(tip)
 
     parent_layout.addWidget(card)
 
@@ -1018,13 +1604,22 @@ def style_step_title(label: QLabel) -> None:
 
 
 def style_compact_button(btn, variant: str = "default") -> None:
+    """步骤卡 ↑↓× 等方块小按钮."""
     btn.setProperty("compact", True)
-    style_button(btn, variant)
+    style_button(btn, variant, size="sm")
+    btn.setFixedSize(22, 22)
 
 
-def style_sidebar_aux_button(btn) -> None:
-    """侧栏次要操作 — 小字、浅色，不抢主按钮视觉."""
+def style_sidebar_aux_button(btn, *, icon_only: bool = False) -> None:
+    """侧栏次要操作。icon_only=True 仅用于纯图标钮（固定方块）。"""
     btn.setProperty("sidebarAux", True)
+    btn.setProperty("iconOnly", "true" if icon_only else "")
+    try:
+        if not icon_only:
+            btn.setMaximumWidth(16777215)
+            btn.setMinimumWidth(0)
+    except Exception:
+        pass
     _repolish(btn)
 
 
@@ -1047,15 +1642,19 @@ def apply_soft_shadow(
 
 
 def setup_main_tabs(tab_widget) -> None:
-    """主界面 Tab — 底线选中，图标同色."""
+    """主界面 Tab — 主色底线选中；文字不省略。"""
     from PyQt6.QtCore import QSize
     tab_widget.setObjectName("mainTabs")
-    tab_widget.setIconSize(QSize(16, 16))
+    tab_widget.setIconSize(QSize(18, 18))
     tab_widget.setDocumentMode(True)
+    tab_widget.setMovable(False)
     bar = tab_widget.tabBar()
     bar.setExpanding(False)
     bar.setUsesScrollButtons(True)
     bar.setDrawBase(False)
+    bar.setElideMode(Qt.TextElideMode.ElideNone)
+    bar.setIconSize(QSize(18, 18))
+    repolish_widget(tab_widget)
 
 
 def setup_log_view(widget) -> None:
@@ -1068,7 +1667,7 @@ def apply_theme(app: QApplication, theme: str | None = None) -> str:
 
     name = theme or get_theme()
     if name not in PALETTES:
-        name = "dark"
+        name = "light"
 
     _activate_palette(name)
     try:
@@ -1078,7 +1677,10 @@ def apply_theme(app: QApplication, theme: str | None = None) -> str:
         pass
 
     app.setStyle("Fusion")
-    app.setFont(QFont("Microsoft YaHei UI", 10))
+    font = QFont()
+    font.setFamilies(["Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Arial"])
+    font.setPointSize(10)
+    app.setFont(font)
     app.setStyleSheet(THEME_QSS)
     _install_combo_scroll_limit()
     p = QPalette()

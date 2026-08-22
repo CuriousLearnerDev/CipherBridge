@@ -12,9 +12,10 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QPlainTextEdit, QFileDialog, QMessageBox, QCheckBox, QSpinBox,
     QListWidget, QListWidgetItem, QFrame, QTabWidget, QLineEdit,
+    QDialog, QDialogButtonBox, QFormLayout,
 )
 
-from core.theme import style_button, style_muted_label, style_sidebar_aux_button, C
+from core.theme import style_button, style_muted_label, style_sidebar_aux_button, setup_sub_tabs, C
 from core.icon_loader import set_btn_icon
 from core.miniprogram_capture import DEFAULT_PORT, MiniprogramCaptureWorker
 from core.system_proxy import is_supported as system_proxy_supported
@@ -130,7 +131,7 @@ class _AppRow(QFrame):
         btn = QPushButton("解包")
         btn.setToolTip("解密并解包此小程序")
         btn.setFixedWidth(64)
-        style_button(btn, "accent")
+        style_button(btn, "default", size="sm")
         set_btn_icon(btn, "unlock", size=14)
         btn.clicked.connect(lambda: self.unpack_clicked.emit(self.info))
         layout.addWidget(btn)
@@ -166,59 +167,67 @@ class MiniprogramPanel(QWidget):
         layout.setContentsMargins(m, m, m, m)
         layout.setSpacing(8)
 
-        # —— 抓包（可选，与解包互补） ——
+        # —— 抓包（可选） ——
         cap_title = QLabel("抓包（可选）")
         cap_title.setObjectName("homeSectionTitle")
         layout.addWidget(cap_title)
+
         cap = QHBoxLayout()
-        cap.setSpacing(6)
+        cap.setSpacing(8)
         self.capture_btn = QPushButton("启动抓包")
         self.capture_btn.setToolTip(
             "mitm 代理抓小程序 HTTPS（需在「设置」安装证书）"
         )
         self.capture_btn.clicked.connect(self._toggle_capture)
-        style_button(self.capture_btn, "accent")
+        style_button(self.capture_btn, "primary", size="sm")
         set_btn_icon(self.capture_btn, "play", size=14)
-        self.capture_btn.setMinimumHeight(32)
-        cap.addWidget(self.capture_btn, 1)
+        cap.addWidget(self.capture_btn)
+        port_lbl = QLabel("端口")
+        port_lbl.setObjectName("proxyFieldLabel")
+        cap.addWidget(port_lbl)
         self.capture_port = QSpinBox()
         self.capture_port.setRange(1024, 65535)
         self.capture_port.setValue(DEFAULT_PORT)
-        self.capture_port.setPrefix(":")
-        self.capture_port.setFixedWidth(78)
+        self.capture_port.setFixedWidth(86)
         self.capture_port.setToolTip("抓包端口")
         cap.addWidget(self.capture_port)
+        cap.addStretch(1)
+        layout.addLayout(cap)
+
+        opt_row = QHBoxLayout()
+        opt_row.setSpacing(8)
         self.sys_proxy_check = QCheckBox("系统代理")
         self.sys_proxy_check.setChecked(system_proxy_supported())
         self.sys_proxy_check.setEnabled(system_proxy_supported())
         self.sys_proxy_check.setToolTip(
-            "会接管本机 HTTP(S)；列表只显示下方过滤后的流量。"
+            "会接管本机 HTTP(S)；列表只显示过滤后的流量。"
             "停止抓包或关闭软件会自动恢复代理。"
             "AI API 域名已默认直连；若无流量请完全退出微信后重开"
         )
-        cap.addWidget(self.sys_proxy_check)
-        layout.addLayout(cap)
+        opt_row.addWidget(self.sys_proxy_check)
 
-        filt_row = QHBoxLayout()
-        filt_row.setSpacing(6)
-        self.filter_edit = QLineEdit()
-        self.filter_edit.setPlaceholderText(
-            "过滤：域名/关键字，逗号分隔；留空=全部。例: api.xxx.com, *.myapp.cn"
-        )
-        self.filter_edit.setToolTip(
-            "只记录匹配的 URL/Host。支持子串与 *.example.com。"
-            "改完即时生效；系统代理仍会转发其它流量，只是不写入列表。"
-        )
-        self.filter_edit.textChanged.connect(self._on_filter_changed)
-        filt_row.addWidget(self.filter_edit, 1)
+        # 屏蔽噪音：一键开关；过滤关键字收到弹窗里，避免占行
         self.noise_check = QCheckBox("屏蔽噪音")
         self.noise_check.setChecked(True)
         self.noise_check.setToolTip(
-            "默认忽略 Windows/微软/谷歌/苹果等系统更新与常见广告域名"
+            "忽略 Windows/微软/谷歌/苹果等系统与广告域名。改域名关键字请点「过滤…」"
         )
-        self.noise_check.toggled.connect(self._on_filter_changed)
-        filt_row.addWidget(self.noise_check)
-        layout.addLayout(filt_row)
+        self.noise_check.toggled.connect(self._on_noise_toggled)
+        opt_row.addWidget(self.noise_check)
+
+        self.filter_btn = QPushButton("过滤…")
+        self.filter_btn.setToolTip("设置只保留哪些域名/关键字（弹窗编辑，确定后收起）")
+        self.filter_btn.clicked.connect(self._open_filter_dialog)
+        style_button(self.filter_btn, "ghost", size="sm")
+        opt_row.addWidget(self.filter_btn)
+        opt_row.addStretch(1)
+        layout.addLayout(opt_row)
+
+        # 隐藏字段：逻辑仍走同一套 filter API，界面不常驻占位
+        self.filter_edit = QLineEdit(self)
+        self.filter_edit.hide()
+        self.filter_edit.setPlaceholderText("过滤：域名/关键字，逗号分隔；留空=全部")
+        self._refresh_filter_btn()
 
         # —— 解包列表（主操作） ——
         list_head = QHBoxLayout()
@@ -227,19 +236,19 @@ class MiniprogramPanel(QWidget):
         list_head.addWidget(self.list_label, 1)
         self.refresh_btn = QPushButton("刷新")
         self.refresh_btn.clicked.connect(self.refresh_list)
-        style_sidebar_aux_button(self.refresh_btn)
+        style_button(self.refresh_btn, "ghost", size="sm")
         set_btn_icon(self.refresh_btn, "refresh", size=14)
         list_head.addWidget(self.refresh_btn)
         add_btn = QPushButton("目录")
         add_btn.setToolTip("手动添加含 wx***** 的包根目录")
         add_btn.clicked.connect(self._add_root)
-        style_sidebar_aux_button(add_btn)
+        style_button(add_btn, "ghost", size="sm")
         list_head.addWidget(add_btn)
         self.open_btn = QPushButton("输出")
         self.open_btn.setToolTip("打开解包输出目录")
         self.open_btn.clicked.connect(self._open_out)
         self.open_btn.setEnabled(False)
-        style_sidebar_aux_button(self.open_btn)
+        style_button(self.open_btn, "ghost", size="sm")
         list_head.addWidget(self.open_btn)
         layout.addLayout(list_head)
 
@@ -260,6 +269,7 @@ class MiniprogramPanel(QWidget):
         layout.addWidget(self.app_list, 1)
 
         detail_tabs = QTabWidget()
+        setup_sub_tabs(detail_tabs)
         self.flow_list = QListWidget()
         self.flow_list.setToolTip("抓到的小程序流量")
         self.flow_list.itemClicked.connect(self._on_local_flow_clicked)
@@ -448,10 +458,108 @@ class MiniprogramPanel(QWidget):
         return True
 
     # —— 抓包 ——
+    def _host_filter_text(self) -> str:
+        return (self.filter_edit.text() if hasattr(self, "filter_edit") else "") or ""
+
+    def _refresh_filter_btn(self) -> None:
+        btn = getattr(self, "filter_btn", None)
+        if btn is None:
+            return
+        filt = self._host_filter_text().strip()
+        noise_on = bool(getattr(self, "noise_check", None) and self.noise_check.isChecked())
+        if filt:
+            short = filt if len(filt) <= 18 else filt[:16] + "…"
+            btn.setText(f"过滤·{short}")
+        elif noise_on:
+            btn.setText("过滤…")
+        else:
+            btn.setText("过滤·全开")
+        tip = (
+            "只记录匹配的 URL/Host（子串 / *.example.com）。\n"
+            f"当前关键字: {filt or '（空=不过滤域名）'}\n"
+            f"屏蔽噪音: {'开' if noise_on else '关'}\n"
+            "点此打开编辑；确定后收起。"
+        )
+        btn.setToolTip(tip)
+
+    def _on_noise_toggled(self, checked: bool) -> None:
+        self._refresh_filter_btn()
+        self._on_filter_changed()
+        # 首次勾选时若还没设过关键字，轻提示可点「过滤…」细调（不强制弹窗）
+        if checked and not self._host_filter_text().strip():
+            self.status.setText("已开屏蔽噪音 · 要只留业务域名可点「过滤…」")
+
+    def _open_filter_dialog(self) -> None:
+        dlg = QDialog(self)
+        dlg.setWindowTitle("流量过滤")
+        dlg.setMinimumWidth(420)
+        lay = QVBoxLayout(dlg)
+        lay.setSpacing(10)
+
+        tip = QLabel(
+            "设置后只影响列表展示；系统代理仍会转发其它流量。"
+            "屏蔽噪音与域名关键字可同时使用。"
+        )
+        tip.setWordWrap(True)
+        style_muted_label(tip)
+        lay.addWidget(tip)
+
+        noise = QCheckBox("屏蔽噪音（系统更新 / 微软 / 谷歌 / 广告等）")
+        noise.setChecked(self.noise_check.isChecked())
+        lay.addWidget(noise)
+
+        form = QFormLayout()
+        form.setSpacing(8)
+        edit = QLineEdit(self._host_filter_text().strip())
+        edit.setPlaceholderText("域名/关键字，逗号分隔；留空=不限制域名")
+        edit.setClearButtonEnabled(True)
+        form.addRow("只保留:", edit)
+        lay.addLayout(form)
+
+        eg = QLabel("示例: servicewechat.com, api.xxx.com, *.myapp.com")
+        style_muted_label(eg)
+        lay.addWidget(eg)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("确定")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        lay.addWidget(buttons)
+
+        edit.setFocus()
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        new_filt = edit.text().strip()
+        self.filter_edit.blockSignals(True)
+        self.filter_edit.setText(new_filt)
+        self.filter_edit.blockSignals(False)
+        self.noise_check.blockSignals(True)
+        self.noise_check.setChecked(noise.isChecked())
+        self.noise_check.blockSignals(False)
+        self._refresh_filter_btn()
+        self._on_filter_changed()
+        if new_filt:
+            self.status.setText(f"过滤已更新 · 仅保留含「{new_filt[:40]}」的流量")
+            self._log(f"过滤关键字: {new_filt}")
+        else:
+            self.status.setText(
+                "过滤已更新 · 不限制域名"
+                + (" · 屏蔽噪音开" if noise.isChecked() else " · 屏蔽噪音关")
+            )
+            self._log("过滤关键字已清空（不限制域名）")
+        if noise.isChecked():
+            self._log("屏蔽噪音: 开")
+        else:
+            self._log("屏蔽噪音: 关")
+
     def _on_filter_changed(self, *_args):
         if self._capture:
             self._capture.set_capture_filter(
-                self.filter_edit.text().strip(),
+                self._host_filter_text().strip(),
                 block_noise=self.noise_check.isChecked(),
             )
 
@@ -474,7 +582,7 @@ class MiniprogramPanel(QWidget):
         self._capture.start(
             port,
             use_system_proxy=self.sys_proxy_check.isChecked(),
-            host_filter=self.filter_edit.text().strip(),
+            host_filter=self._host_filter_text().strip(),
             block_noise=self.noise_check.isChecked(),
         )
 
@@ -490,7 +598,7 @@ class MiniprogramPanel(QWidget):
         self.sys_proxy_check.setEnabled(False)
         self.status.setText(f"抓包中 :{port} — 请打开微信小程序操作")
         self._log(f"抓包已启动 127.0.0.1:{port}")
-        filt = self.filter_edit.text().strip()
+        filt = self._host_filter_text().strip()
         if filt:
             self._log(f"仅记录匹配: {filt}")
         if self.noise_check.isChecked():
