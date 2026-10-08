@@ -207,6 +207,31 @@ class HookTool(BaseTool):
         raise ValueError(f"Unknown action: {action}")
 
 
+def _resolve_script(
+    scripts: dict[str, str], ref: str
+) -> tuple[str, str] | None:
+    """Exact or fuzzy match url/filename → (matched_url, content)."""
+    if not ref:
+        return None
+    content = scripts.get(ref)
+    if content is not None:
+        return ref, content
+    for u, c in scripts.items():
+        if ref in u or u.endswith(ref):
+            return u, c or ""
+    return None
+
+
+def _business_scripts(scripts: dict[str, str]) -> list[tuple[str, str]]:
+    from core.script_enrich import is_library_url
+
+    ordered = sorted(
+        scripts.items(),
+        key=lambda kv: (1 if is_library_url(kv[0]) else 0, kv[0]),
+    )
+    return [(u, c or "") for u, c in ordered if not is_library_url(u)]
+
+
 class ScriptTool(BaseTool):
     """只读查询页面 / 小程序 JS 中的加解密实现."""
 
@@ -219,33 +244,143 @@ class ScriptTool(BaseTool):
         return ToolMetadata(
             name="script",
             description=(
-                "只读查询已载入的页面 JS / 小程序源码 / App 反编译代码（app://）。"
-                "list=脚本列表；search=关键字；read=按 url+offset 读片段。"
-                "优先查业务脚本，不要反复翻页 crypto-js / NIM 等库文件。"
+                "只读查询已载入 JS/HTML（全文在本地索引，勿通读）。"
+                "硬顺序：list → enrich/outline → search → 定点 read；禁止把整文件贴进对话。"
+                "enrich=API/加解密证据；search=关键字（搜全文）；read=约8k窗口。"
+                "不要翻页 crypto-js / NIM / libs。"
             ),
-            actions=["list", "search", "read"],
+            actions=["list", "enrich", "outline", "ast", "search", "read"],
             tags=["crypto", "readonly", "javascript"],
         )
 
+    def _scripts_normalized(self) -> dict[str, str]:
+        from core.script_enrich import normalize_script_text
+
+        out: dict[str, str] = {}
+        for u, c in self._session.scripts().items():
+            out[u] = normalize_script_text(c or "")
+        return out
+
     async def execute(self, action: str, **kwargs: Any) -> Any:
-        scripts = self._session.scripts()
+        scripts = self._scripts_normalized()
         if action == "list":
+            from core.script_enrich import is_library_url, source_kind
+
             items = []
             for u, c in list(scripts.items())[:80]:
                 text = c or ""
-                lib = any(
-                    x in u.lower()
-                    for x in ("crypto-js", "nim_web_", "/libs/", "miniprogram_npm")
-                )
+                lib = is_library_url(u)
                 items.append(
                     {
                         "url": u,
                         "chars": len(text),
+                        "source_kind": source_kind(u, text),
                         "kind": "library" if lib else "business",
-                        "hint": "库文件，勿反复分页" if lib else "优先分析",
+                        "hint": "库文件，勿反复分页" if lib else "优先 enrich→search",
                     }
                 )
-            return {"total": len(scripts), "items": items}
+            return {
+                "total": len(scripts),
+                "items": items,
+                "note": "全文已索引；请 enrich/search，不要 read 通读。",
+            }
+
+        if action in ("enrich", "outline", "ast"):
+            from core.script_enrich import (
+                enrich_source,
+                format_enrich,
+                format_outline,
+                outline_js,
+                source_kind,
+            )
+
+            ref = str(
+                kwargs.get("url")
+                or kwargs.get("id")
+                or kwargs.get("path")
+                or kwargs.get("name")
+                or ""
+            ).strip()
+            mode = "enrich" if action == "enrich" else "outline"
+
+            if ref:
+                hit = _resolve_script(scripts, ref)
+                if hit is None:
+                    return {
+                        "error": f"未找到脚本: {ref}",
+                        "available": list(scripts.keys())[:20],
+                    }
+                url, content = hit
+                if mode == "enrich":
+                    report = enrich_source(url, content)
+                    return {
+                        "action": "enrich",
+                        "url": url,
+                        "kind": report.get("kind"),
+                        "report": report,
+                        "summary": format_enrich(report),
+                        "note": "enrich 仅为证据；细看再用 search/read",
+                    }
+                kind = source_kind(url, content)
+                if kind == "html":
+                    report = enrich_source(url, content)
+                    html = report.get("html") or {}
+                    scripts_info = html.get("scripts") or {}
+                    outline = report.get("outline") or {}
+                    text = format_outline(outline, url)
+                    ext = scripts_info.get("external") or []
+                    if ext:
+                        text += "\n  external:\n" + "\n".join(f"    {s}" for s in ext[:40])
+                    return {
+                        "action": "outline",
+                        "url": url,
+                        "kind": kind,
+                        "outline": outline,
+                        "summary": text or f"{url}\n  (html)",
+                    }
+                outline = outline_js(content)
+                return {
+                    "action": "outline",
+                    "url": url,
+                    "kind": kind,
+                    "outline": outline,
+                    "summary": format_outline(outline, url),
+                }
+
+            # 无 url：业务脚本批量 enrich/outline（最多 5 个）
+            biz = _business_scripts(scripts)[:5]
+            if not biz:
+                # 回退：任意前 3 个
+                biz = [(u, c or "") for u, c in list(scripts.items())[:3]]
+            if not biz:
+                return {"error": "没有已载入脚本；请先采集网页 / 小程序 / App"}
+
+            summaries: list[str] = []
+            reports: list[dict] = []
+            for url, content in biz:
+                if mode == "enrich":
+                    report = enrich_source(url, content)
+                    reports.append(report)
+                    summaries.append(format_enrich(report))
+                else:
+                    kind = source_kind(url, content)
+                    if kind == "html":
+                        report = enrich_source(url, content)
+                        summaries.append(format_enrich(report))
+                    else:
+                        outline = outline_js(content)
+                        summaries.append(format_outline(outline, url))
+            return {
+                "action": mode,
+                "count": len(biz),
+                "urls": [u for u, _ in biz],
+                "reports": reports if mode == "enrich" else None,
+                "summary": "\n\n".join(summaries),
+                "note": (
+                    "已摘要业务脚本前若干个；可对具体 url 再 enrich/outline，"
+                    "或 search/read 细看。勿通读全文。"
+                ),
+            }
 
         if action == "search":
             query = str(kwargs.get("query") or kwargs.get("q") or kwargs.get("text") or "").strip()
@@ -325,16 +460,10 @@ class ScriptTool(BaseTool):
             ).strip()
             if not url:
                 return {"error": "请提供 url"}
-            content = scripts.get(url)
-            matched = url
-            if content is None:
-                for u, c in scripts.items():
-                    if url in u or u.endswith(url):
-                        content = c
-                        matched = u
-                        break
-            if content is None:
+            hit = _resolve_script(scripts, url)
+            if hit is None:
                 return {"error": f"未找到脚本: {url}", "available": list(scripts.keys())[:20]}
+            matched, content = hit
             total = len(content or "")
             offset = int(kwargs.get("offset") or 0)
             if offset < 0:
@@ -360,6 +489,10 @@ class ScriptTool(BaseTool):
                 "content": chunk,
                 "truncated": total > offset + MAX_SCRIPT_CHUNK,
                 "next_offset": offset + len(chunk) if total > offset + len(chunk) else None,
+                "note": (
+                    "仅窗口片段。请先 enrich/search 再定点 read；"
+                    "禁止为通读整文件连续翻页。"
+                ),
             }
 
         raise ValueError(f"Unknown action: {action}")

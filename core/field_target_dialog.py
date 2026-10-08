@@ -344,7 +344,7 @@ class FieldTargetDialog(QDialog):
         split.setChildrenCollapsible(False)
         split.setHandleWidth(4)
 
-        left_card, left_body = _make_panel("请求", step="1")
+        left_card, left_body = _make_panel("请求")
         sort_row = QHBoxLayout()
         sort_row.setSpacing(4)
         self.sort_combo = QComboBox()
@@ -374,7 +374,7 @@ class FieldTargetDialog(QDialog):
         rl.setContentsMargins(0, 0, 0, 0)
         rl.setSpacing(4)
 
-        field_card, field_body = _make_panel("字段", step="2")
+        field_card, field_body = _make_panel("字段")
         ctrl = QHBoxLayout()
         ctrl.setSpacing(4)
         side_bar, self.side_group, self.side_btns = _make_seg_bar(
@@ -396,6 +396,15 @@ class FieldTargetDialog(QDialog):
             ],
             exclusive_id="role",
             height=22,
+        )
+        self.role_btns[self.ROLE_DECRYPT].setToolTip(
+            "高亮「解密」：勾选字段后确认 → 分析并生成解密端"
+        )
+        self.role_btns[self.ROLE_RESP].setToolTip(
+            "高亮「响应解密」：勾选响应字段 → 按解密端分析"
+        )
+        self.role_btns[self.ROLE_ENCRYPT].setToolTip(
+            "高亮「加密」：勾选字段后确认 → 分析并生成加密端"
         )
         want = self._default_role
         if want in self.role_btns:
@@ -454,9 +463,7 @@ class FieldTargetDialog(QDialog):
 
         foot = QHBoxLayout()
         foot.setSpacing(6)
-        self.foot_hint = QLabel()
-        style_muted_label(self.foot_hint)
-        foot.addWidget(self.foot_hint, 1)
+        foot.addStretch(1)
         cancel = QPushButton("取消")
         style_button(cancel, "ghost", size="sm")
         cancel.clicked.connect(self.reject)
@@ -502,6 +509,7 @@ class FieldTargetDialog(QDialog):
             return
         self._role = str(btn.property("segData") or self.ROLE_DECRYPT)
         self._reload_tree()
+        self._sync_status()
 
     def _sorted_indices(self) -> list[int]:
         idxs = list(range(len(self._flows)))
@@ -665,31 +673,25 @@ class FieldTargetDialog(QDialog):
         n = len(self._picked)
         if self.unrestricted.isChecked():
             self.status_lab.setText("盲目分析")
-            self.foot_hint.setText("已跳过字段限定")
             return
         self.status_lab.setText(f"已选 {n} 个字段" if n else "尚未选字段")
-        fi = self._current_flow_index()
-        if fi is not None and 0 <= fi < len(self._flows):
-            seq = flow_seq(self._flows[fi], fi + 1)
-            side = "响应" if self._side == "response" else "请求"
-            self.foot_hint.setText(f"当前：#{seq} · {side} · 标记为「{self._role_label()}」")
-        else:
-            self.foot_hint.setText("从左侧点选一条请求开始")
-
-    def _role_label(self) -> str:
-        return {
-            self.ROLE_DECRYPT: "请求解密",
-            self.ROLE_RESP: "响应解密",
-            self.ROLE_ENCRYPT: "加密",
-        }.get(self._role, self._role)
 
     def _on_unrestricted(self, on: bool) -> None:
         self._content.setEnabled(not on)
         self._sync_status()
 
     def result(self) -> dict:
+        analysis_role = (
+            "encrypt" if self._role == self.ROLE_ENCRYPT else "decrypt"
+        )
         if self.unrestricted.isChecked():
-            return {"unrestricted": True, "decrypt": [], "encrypt": [], "resp_decrypt": []}
+            return {
+                "unrestricted": True,
+                "decrypt": [],
+                "encrypt": [],
+                "resp_decrypt": [],
+                "analysis_role": analysis_role,
+            }
         decrypt, encrypt, resp = [], [], []
         for it in self._picked.values():
             role = it.get("role")
@@ -712,6 +714,7 @@ class FieldTargetDialog(QDialog):
             "decrypt": decrypt,
             "encrypt": encrypt,
             "resp_decrypt": resp,
+            "analysis_role": analysis_role,
         }
 
 

@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import os
 from PyQt6.QtGui import QFont, QPalette, QColor
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QApplication, QLabel, QWidget, QComboBox, QPushButton, QVBoxLayout, QFrame
+from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtWidgets import (
+    QApplication, QLabel, QWidget, QComboBox, QPushButton, QVBoxLayout, QFrame,
+)
 
 PALETTES: dict[str, dict[str, str]] = {
     "dark": {
@@ -130,11 +132,11 @@ QDialog {{
     border-radius: 10px;
 }}
 QToolTip {{
-    background-color: {c['surface2']};
+    /* Windows：勿用 border-radius/opacity，否则背景变黑、字色失效看不清 */
+    background-color: {c['surface']};
     color: {c['text']};
     border: 1px solid {c['border']};
     padding: 6px 10px;
-    border-radius: 6px;
     font-size: 12px;
 }}
 QMessageBox {{
@@ -157,13 +159,36 @@ QMessageBox QLabel {{
     background: transparent;
     padding: 2px 2px 0 2px;
 }}
+#sidebarSectionProject {{
+    color: {c['text_dim']};
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    background: transparent;
+    padding: 2px 2px 0 2px;
+}}
 #proxyRail {{
     background-color: {c['surface']};
     border: 1px solid {c.get('line_soft', c['border'])};
-    border-radius: 10px;
+    border-radius: 8px;
+}}
+#proxyRail[inactive="true"] {{
+    background-color: {c['surface2']};
+    border: 1px solid {c.get('line_soft', c['border'])};
+}}
+#projectRail {{
+    background-color: {c['surface2']};
+    border: 1px solid {c.get('line_soft', c['border'])};
+    border-radius: 8px;
+}}
+#projectRail QComboBox {{
+    min-height: 22px;
+    max-height: 22px;
+    font-weight: 600;
+    font-size: 12px;
 }}
 #proxyStatusText {{
-    font-size: 12.5px;
+    font-size: 12px;
     font-weight: 600;
     background: transparent;
 }}
@@ -172,9 +197,10 @@ QMessageBox QLabel {{
     font-size: 11px;
     font-weight: 500;
     background: transparent;
+    min-width: 28px;
 }}
 #proxyCertHint {{
-    font-size: 11px;
+    font-size: 10px;
     background: transparent;
 }}
 #sidebar QGroupBox {{
@@ -200,10 +226,16 @@ QMessageBox QLabel {{
     background-color: transparent;
 }}
 #sidebar QPushButton {{
-    min-height: 28px;
-    padding: 4px 10px;
-    border-radius: 6px;
+    min-height: 24px;
+    padding: 2px 8px;
+    border-radius: 5px;
     font-weight: 600;
+    font-size: 12px;
+}}
+#sidebar QPushButton[btnSize="sm"] {{
+    min-height: 22px;
+    max-height: 24px;
+    padding: 1px 8px;
     font-size: 12px;
 }}
 #sidebar QPushButton[variant="primary"],
@@ -212,12 +244,19 @@ QMessageBox QLabel {{
     min-width: 0;
 }}
 #sidebar QComboBox, #sidebar QSpinBox {{
-    min-height: 26px;
-    padding: 2px 6px;
-    border-radius: 5px;
+    min-height: 22px;
+    max-height: 22px;
+    padding: 1px 4px;
+    padding-right: 16px;
+    border-radius: 4px;
     background-color: {c['input_bg']};
     border: 1px solid {c['border']};
     font-size: 12px;
+}}
+#sidebar QComboBox::drop-down {{
+    width: 16px;
+    border: none;
+    background: transparent;
 }}
 #sidebarPortLabel {{
     min-width: 28px;
@@ -258,36 +297,38 @@ QMessageBox QLabel {{
 #sidebarBrandCard {{
     background: transparent;
     border: none;
+    border-top: 1px solid {c.get('line_soft', c['border'])};
     border-radius: 0;
     margin: 0;
-    padding: 4px 0 6px 0;
+    padding: 6px 0 0 0;
 }}
 #sidebarBrandLogoWell {{
     background: transparent;
     border: none;
 }}
 #sidebarBrandLogo {{
-    background: {c.get('accent_soft', c.get('surface2', c['surface']))};
-    border: 1px solid {c['border']};
-    border-radius: 8px;
-    padding: 2px;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    padding: 0;
+    opacity: 0.7;
 }}
 #sidebarBrandNameCn {{
-    font-size: 15px;
-    font-weight: 800;
-    letter-spacing: 0.2px;
-    color: {c['text']};
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0;
+    color: {c['text_dim']};
     background: transparent;
 }}
 #sidebarBrandNameEn {{
-    font-size: 12px;
-    font-weight: 600;
-    color: {c.get('accent', c['primary'])};
+    font-size: 10px;
+    font-weight: 500;
+    color: {c['text_dim']};
     background: transparent;
 }}
 #sidebarBrandAuthor {{
-    font-size: 11px;
-    font-weight: 600;
+    font-size: 10px;
+    font-weight: 400;
     color: {c['text_dim']};
     background: transparent;
 }}
@@ -344,21 +385,39 @@ QMessageBox QLabel {{
 #aiPane {{
     background: {c['surface']};
     border: 1px solid {c['border']};
-    border-radius: 14px;
+    border-radius: 10px;
 }}
 #aiToolbar {{
     background: transparent;
     border: none;
     border-bottom: 1px solid {c['border']};
-    padding-bottom: 8px;
+    padding-bottom: 4px;
+}}
+#aiTabCorner {{
+    background: transparent;
+    border: none;
+}}
+#aiTabCorner QLabel#aiReadyChip {{
+    padding: 2px 8px;
+    font-size: 11px;
+}}
+#aiCaptureBar QLabel#aiNextHint {{
+    font-size: 11px;
+    padding: 2px 2px 0 2px;
+    max-width: none;
 }}
 #aiCaptureBar {{
     background: transparent;
     border: none;
     border-bottom: 1px solid {c['border']};
     border-radius: 0;
-    min-height: 40px;
-    padding-bottom: 8px;
+    min-height: 32px;
+    padding-bottom: 4px;
+}}
+#aiCaptureBar #aiBarSep {{
+    background: {c['border']};
+    border: none;
+    max-width: 1px;
 }}
 #aiActionBar, #aiComposer {{
     background: transparent;
@@ -366,9 +425,103 @@ QMessageBox QLabel {{
     border-radius: 0;
     min-height: 0;
 }}
+#aiActionBar QPushButton {{
+    min-width: 0;
+    padding-left: 10px;
+    padding-right: 10px;
+}}
+#aiActionBar QToolButton {{
+    min-height: 26px;
+    max-height: 26px;
+    padding: 0 8px;
+    font-size: 12px;
+}}
+#aiCaptureBar QPushButton {{
+    min-width: 48px;
+}}
+#aiCaptureBar QSpinBox {{
+    min-height: 28px;
+    max-height: 28px;
+}}
+#miniCaptureBar {{
+    background: transparent;
+    border: none;
+    min-height: 30px;
+}}
+#miniCaptureBar #miniCaptureBtn {{
+    min-width: 104px;
+    padding-left: 12px;
+    padding-right: 14px;
+}}
+#miniPortChip {{
+    background: {c['input_bg']};
+    border: 1px solid {c['border']};
+    border-radius: 6px;
+    min-height: 28px;
+    max-height: 28px;
+}}
+#miniPortChip:hover {{
+    border-color: {c['primary']};
+}}
+#miniPortLabel {{
+    color: {c['text_dim']};
+    font-size: 11px;
+    font-weight: 500;
+    background: transparent;
+    padding: 0;
+}}
+#miniCapturePort {{
+    background: transparent;
+    border: none;
+    min-height: 24px;
+    max-height: 24px;
+    padding: 0 2px;
+    padding-right: 14px;
+    font-size: 12px;
+    font-weight: 600;
+    color: {c['text']};
+}}
+#miniCapturePort:focus {{
+    border: none;
+    outline: none;
+}}
+#miniCapturePort::up-button, #miniCapturePort::down-button {{
+    width: 14px;
+    border: none;
+    background: transparent;
+}}
+#miniDetailSplit::handle:vertical {{
+    height: 5px;
+    margin: 2px 4px;
+    border-radius: 2px;
+    background: {c['border']};
+}}
+#miniDetailSplit::handle:vertical:hover {{
+    background: {c['primary']};
+}}
 #aiComposer {{
     border-top: 1px solid {c['border']};
-    padding-top: 8px;
+    padding-top: 2px;
+}}
+#aiComposer QComboBox {{
+    min-height: 22px;
+    max-height: 22px;
+    padding: 1px 4px;
+    padding-right: 16px;
+    font-size: 11px;
+}}
+#aiComposer QLineEdit {{
+    min-height: 22px;
+    max-height: 22px;
+    padding: 1px 6px;
+    font-size: 12px;
+}}
+#aiComposer QPushButton {{
+    min-height: 22px;
+    max-height: 22px;
+    min-width: 48px;
+    padding: 1px 8px;
+    font-size: 12px;
 }}
 #aiReadyChip {{
     border-radius: 999px;
@@ -586,47 +739,53 @@ QLineEdit, QSpinBox, QComboBox, QTextEdit, QPlainTextEdit {{
     background-color: {c['input_bg']};
     border: 1px solid {c['border']};
     border-radius: {r};
-    padding: 7px 10px;
+    padding: 4px 8px;
     color: {c['text']};
     selection-background-color: {c['selection']};
-    min-height: 20px;
+    min-height: 18px;
 }}
 QLineEdit:focus, QSpinBox:focus, QComboBox:focus, QTextEdit:focus, QPlainTextEdit:focus {{
     border: 1px solid {c['focus']};
     background-color: {c['input_focus_bg']};
 }}
-QComboBox {{ padding-right: 22px; min-height: 26px; max-height: 26px; }}
+QComboBox {{
+    padding: 2px 6px;
+    padding-right: 18px;
+    min-height: 22px;
+    max-height: 22px;
+    font-size: 12px;
+}}
 QComboBox::drop-down {{
     subcontrol-origin: padding;
-    subcontrol-position: top right;
-    width: 24px;
-    border-left: 1px solid {c['border']};
-    background-color: {c['surface2']};
-    border-top-right-radius: {r};
-    border-bottom-right-radius: {r};
+    subcontrol-position: center right;
+    width: 16px;
+    border: none;
+    background: transparent;
 }}
-QComboBox::drop-down:hover {{ background-color: {c['primary']}; }}
+QComboBox::drop-down:hover {{ background: transparent; }}
 QComboBox::down-arrow {{
     width: 0; height: 0;
     border-left: 3px solid transparent;
     border-right: 3px solid transparent;
     border-top: 4px solid {c['text_dim']};
+    margin-right: 4px;
 }}
-QComboBox::drop-down:hover::down-arrow {{ border-top-color: {c['primary_fg']}; }}
+QComboBox::drop-down:hover::down-arrow {{ border-top-color: {c['text']}; }}
 QComboBox QAbstractItemView {{
     background-color: {c['surface2']};
     border: 1px solid {c['border']};
     border-radius: {r};
-    padding: 4px;
+    padding: 2px;
     selection-background-color: {c['selection']};
     selection-color: {c['text']};
     outline: none;
-    max-height: 320px;
+    max-height: 280px;
 }}
 QComboBox QAbstractItemView::item {{
-    padding: 4px 8px;
-    border-radius: 4px;
-    margin: 1px;
+    padding: 3px 6px;
+    border-radius: 3px;
+    margin: 0;
+    min-height: 18px;
 }}
 QSpinBox {{ padding-right: 18px; }}
 QSpinBox::up-button, QSpinBox::down-button {{
@@ -722,7 +881,7 @@ QTabWidget#subTabs QTabBar::tab:hover:!selected {{
     background: transparent;
 }}
 #aiPane QTabWidget#subTabs::pane {{
-    padding: 8px 0 0 0;
+    padding: 2px 0 0 0;
 }}
 
 /* 按钮体系：紧凑但不裁切中文；不用死锁 max-height */
@@ -877,21 +1036,44 @@ QTabBar QToolButton:hover {{
 }}
 QTabWidget#mainTabs::pane {{
     border: none;
+    border-top: none;
     border-radius: 0;
     background: transparent;
-    padding: 10px 12px 12px 12px;
+    top: 0px;
+    padding: 0px;
+    margin: 0px;
 }}
 QTabWidget#mainTabs {{
     background: transparent;
+    border: none;
+    padding: 0px;
+    margin: 0px;
 }}
-QTabWidget#mainTabs QTabBar {{
+QTabWidget#mainTabs > QTabBar {{
+    height: 0px;
+    max-height: 0px;
+    min-height: 0px;
+    border: none;
+}}
+QTabWidget#mainTabs::tab-bar {{
+    height: 0px;
+    width: 0px;
+    alignment: left;
+}}
+/* 自定义主导航：左核心 / 右工具（通栏） */
+#mainTabNav {{
     background: {c['surface']};
     border: none;
     border-bottom: 1px solid {c['border']};
-    min-height: 38px;
-    padding-left: 8px;
+    min-height: 36px;
+    max-height: 40px;
 }}
-QTabWidget#mainTabs QTabBar::tab {{
+#mainTabNavSep {{
+    background: {c.get('line_soft', c['border'])};
+    border: none;
+    margin: 0 4px;
+}}
+#mainTabNav QPushButton {{
     background: transparent;
     border: none;
     border-bottom: 2px solid transparent;
@@ -900,20 +1082,20 @@ QTabWidget#mainTabs QTabBar::tab {{
     margin: 0 1px;
     color: {c['tab_text']};
     min-height: 18px;
+    min-width: 0;
     font-weight: 600;
     font-size: 12px;
 }}
-QTabWidget#mainTabs QTabBar::tab:selected {{
-    background: transparent;
-    border: none;
-    border-bottom: 2px solid {c['primary']};
-    color: {c['tab_text_selected']};
-    font-weight: 700;
-}}
-QTabWidget#mainTabs QTabBar::tab:hover:!selected {{
+#mainTabNav QPushButton:hover {{
     background: {c['ghost_hover']};
     color: {c['tab_text_selected']};
     border-radius: 6px 6px 0 0;
+}}
+#mainTabNav QPushButton[navActive="true"] {{
+    background: transparent;
+    border-bottom: 2px solid {c['primary']};
+    color: {c['tab_text_selected']};
+    font-weight: 700;
 }}
 
 QTreeWidget, QListWidget, QTableWidget {{
@@ -1002,16 +1184,6 @@ QMenu::separator {{
     height: 1px;
     background: {c['border']};
     margin: 4px 8px;
-}}
-
-QToolTip {{
-    background-color: {c['surface2']};
-    color: {c['text']};
-    border: 1px solid {c['border']};
-    padding: 6px 10px;
-    border-radius: {r};
-    font-size: 11px;
-    opacity: 255;
 }}
 
 QToolButton {{
@@ -1270,7 +1442,7 @@ QLabel[feedbackKind="error"] {{ color: {c['danger']}; border-color: {c['danger']
     background: {c.get('badge_bg', c['surface2'])};
     border: 1px solid {c.get('line_soft', c['border'])};
     border-radius: 8px;
-    padding: 8px;
+    padding: 4px;
 }}
 #homeEmptyHint {{
     background: transparent;
@@ -1325,6 +1497,105 @@ def configure_combo_popup(combo: QComboBox, max_visible: int = 12, max_height: i
     view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
 
+def strip_op_emoji(name: str) -> str:
+    """去掉操作名开头的 emoji，仅用于界面展示（内部仍用完整 type 名）."""
+    s = (name or "").strip()
+    if not s:
+        return s
+    i = 0
+    while i < len(s):
+        ch = s[i]
+        if ch.isspace():
+            i += 1
+            continue
+        o = ord(ch)
+        # 字母 / 数字 / CJK / 常见标点 → 正文开始
+        if (
+            ch.isalnum()
+            or 0x4E00 <= o <= 0x9FFF
+            or ch in "()（）[]【】/-_.·"
+        ):
+            break
+        i += 1
+    return s[i:].lstrip() or s
+
+
+# 操作类型 → 线标图标（img/icons/op_*.svg，iconfont 语义匹配）
+_OP_ICON_BY_LABEL: dict[str, str] = {
+    "解密字段": "op_decrypt",
+    "加密字段": "op_encrypt",
+    "解密响应字段": "op_decrypt_resp",
+    "加密响应字段": "op_encrypt_resp",
+    "签名(Hash)": "op_hash",
+    "签名(HMAC带密钥)": "op_hmac",
+    "签名(排序拼接)": "op_sort_sign",
+    "编码转换": "op_encode",
+    "拼接字符串": "op_link",
+    "AuthToken生成": "op_authtoken",
+    "正则清洗": "op_regex",
+    "设置Header": "op_tag",
+    "设置Body字段": "op_package",
+    "生成时间戳": "op_time",
+    "生成随机数": "op_random",
+    "定义密钥(固定值)": "op_key_define",
+    "提取密钥(从响应)": "op_key_extract",
+    "派生密钥(计算)": "op_key_derive",
+    "字符串切片": "op_slice",
+    "字符串反转": "op_reverse",
+}
+
+
+def op_icon_name(op_type: str) -> str:
+    """操作类型对应的图标逻辑名."""
+    raw = (op_type or "").strip()
+    if raw.startswith("🔌"):
+        return "plugin"
+    label = strip_op_emoji(raw)
+    if label in _OP_ICON_BY_LABEL:
+        return _OP_ICON_BY_LABEL[label]
+    if "解密响应" in label:
+        return "op_decrypt_resp"
+    if "加密响应" in label:
+        return "op_encrypt_resp"
+    if "解密" in label:
+        return "op_decrypt"
+    if "加密" in label:
+        return "op_encrypt"
+    if "HMAC" in label:
+        return "op_hmac"
+    if "Hash" in label or "哈希" in label:
+        return "op_hash"
+    if "签名" in label:
+        return "op_sign"
+    if "提取密钥" in label:
+        return "op_key_extract"
+    if "派生密钥" in label:
+        return "op_key_derive"
+    if "密钥" in label:
+        return "op_key_define"
+    if "编码" in label:
+        return "op_encode"
+    if "拼接" in label:
+        return "op_link"
+    if "Header" in label or "header" in label:
+        return "op_tag"
+    if "Body" in label or "body" in label:
+        return "op_package"
+    if "时间" in label:
+        return "op_time"
+    if "随机" in label:
+        return "op_random"
+    if "正则" in label:
+        return "op_regex"
+    if "切片" in label:
+        return "op_slice"
+    if "反转" in label:
+        return "op_reverse"
+    if "AuthToken" in label or "Token" in label:
+        return "op_authtoken"
+    return "plugin"
+
+
 def pick_from_list(
     parent,
     title: str,
@@ -1332,12 +1603,15 @@ def pick_from_list(
     sections: list[tuple[str, list[str]]] | None = None,
     max_height: int = 360,
 ) -> str | None:
-    """滚动列表选择对话框，用于选项较多时替代超长菜单."""
-    from PyQt6.QtCore import Qt
+    """滚动列表选择对话框，用于选项较多时替代超长菜单.
+
+    操作类型等带 emoji 的项：列表显示线标图标 + 纯文字，返回值仍是完整原名。
+    """
     from PyQt6.QtWidgets import (
         QDialog, QVBoxLayout, QListWidget, QListWidgetItem,
         QDialogButtonBox,
     )
+    from core.icon_loader import icon as load_icon
 
     dlg = QDialog(parent)
     dlg.setWindowTitle(title)
@@ -1346,6 +1620,9 @@ def pick_from_list(
 
     list_w = QListWidget()
     list_w.setMaximumHeight(max_height)
+    list_w.setIconSize(QSize(18, 18))
+    # 操作选择：去掉系统 emoji 彩色字感，统一线标
+    use_op_icons = "操作" in (title or "")
 
     def add_section(section_title: str, names: list[str], with_header: bool) -> None:
         if with_header and section_title:
@@ -1354,20 +1631,37 @@ def pick_from_list(
             header.setForeground(QColor(C["text_dim"]))
             list_w.addItem(header)
         for name in names:
-            list_w.addItem(name)
+            if use_op_icons:
+                item = QListWidgetItem(strip_op_emoji(name))
+                item.setData(Qt.ItemDataRole.UserRole, name)
+                ic = load_icon(op_icon_name(name), 18)
+                if not ic.isNull():
+                    item.setIcon(ic)
+                list_w.addItem(item)
+            else:
+                list_w.addItem(name)
 
     if sections:
         for i, (section_title, names) in enumerate(sections):
             add_section(section_title, names, with_header=True)
     elif items:
         for name in items:
-            list_w.addItem(name)
+            if use_op_icons:
+                item = QListWidgetItem(strip_op_emoji(name))
+                item.setData(Qt.ItemDataRole.UserRole, name)
+                ic = load_icon(op_icon_name(name), 18)
+                if not ic.isNull():
+                    item.setIcon(ic)
+                list_w.addItem(item)
+            else:
+                list_w.addItem(name)
 
     chosen: dict[str, str | None] = {"value": None}
 
     def accept_item(item: QListWidgetItem | None) -> None:
         if item and (item.flags() & Qt.ItemFlag.ItemIsSelectable):
-            chosen["value"] = item.text()
+            val = item.data(Qt.ItemDataRole.UserRole)
+            chosen["value"] = val if isinstance(val, str) and val else item.text()
             dlg.accept()
 
     list_w.itemDoubleClicked.connect(accept_item)
@@ -1525,7 +1819,7 @@ def setup_sub_tabs(tab_widget) -> None:
 
 
 def build_logo_header(parent_layout, icon_path: str | None = None) -> None:
-    """侧边栏品牌区 — 图标与标题略突出。"""
+    """侧边栏底部品牌脚注 — 弱化显示，不抢主操作注意力。"""
     from PyQt6.QtCore import Qt
     from PyQt6.QtGui import QPixmap
     from PyQt6.QtWidgets import QFrame, QHBoxLayout, QVBoxLayout, QLabel
@@ -1537,21 +1831,21 @@ def build_logo_header(parent_layout, icon_path: str | None = None) -> None:
     repolish_widget(card)
 
     outer = QVBoxLayout(card)
-    outer.setContentsMargins(2, 4, 2, 12)
+    outer.setContentsMargins(0, 8, 0, 0)
     outer.setSpacing(0)
 
     row = QHBoxLayout()
-    row.setSpacing(10)
+    row.setSpacing(6)
     row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
     logo = QLabel()
     logo.setObjectName("sidebarBrandLogo")
-    logo.setFixedSize(42, 42)
+    logo.setFixedSize(20, 20)
     logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
     img = icon_path or MAIN_ICON
     if img:
         pm = QPixmap(img).scaled(
-            34, 34, Qt.AspectRatioMode.KeepAspectRatio,
+            16, 16, Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
         if not pm.isNull():
@@ -1559,7 +1853,7 @@ def build_logo_header(parent_layout, icon_path: str | None = None) -> None:
     row.addWidget(logo)
 
     text_col = QVBoxLayout()
-    text_col.setSpacing(2)
+    text_col.setSpacing(0)
     name_cn = QLabel(f"{APP_NAME} {APP_NAME_EN} {APP_VERSION}")
     name_cn.setObjectName("sidebarBrandNameCn")
     text_col.addWidget(name_cn)
@@ -1642,18 +1936,19 @@ def apply_soft_shadow(
 
 
 def setup_main_tabs(tab_widget) -> None:
-    """主界面 Tab — 主色底线选中；文字不省略。"""
-    from PyQt6.QtCore import QSize
+    """主界面 Tab — 隐藏原生 TabBar，由通栏 mainTabNav 承担导航。"""
     tab_widget.setObjectName("mainTabs")
     tab_widget.setIconSize(QSize(18, 18))
     tab_widget.setDocumentMode(True)
     tab_widget.setMovable(False)
+    tab_widget.setContentsMargins(0, 0, 0, 0)
     bar = tab_widget.tabBar()
+    bar.hide()
+    bar.setFixedHeight(0)
     bar.setExpanding(False)
-    bar.setUsesScrollButtons(True)
+    bar.setUsesScrollButtons(False)
     bar.setDrawBase(False)
     bar.setElideMode(Qt.TextElideMode.ElideNone)
-    bar.setIconSize(QSize(18, 18))
     repolish_widget(tab_widget)
 
 
@@ -1693,18 +1988,31 @@ def apply_theme(app: QApplication, theme: str | None = None) -> str:
     p.setColor(QPalette.ColorRole.ButtonText, QColor(C["text"]))
     p.setColor(QPalette.ColorRole.Highlight, QColor(C["selection"]))
     p.setColor(QPalette.ColorRole.HighlightedText, QColor(C["text"]))
-    p.setColor(QPalette.ColorRole.ToolTipBase, QColor(C["surface2"]))
+    p.setColor(QPalette.ColorRole.ToolTipBase, QColor(C["surface"]))
     p.setColor(QPalette.ColorRole.ToolTipText, QColor(C["text"]))
     for group in (
         QPalette.ColorGroup.Active,
         QPalette.ColorGroup.Inactive,
         QPalette.ColorGroup.Disabled,
     ):
-        p.setColor(group, QPalette.ColorRole.ToolTipBase, QColor(C["surface2"]))
+        p.setColor(group, QPalette.ColorRole.ToolTipBase, QColor(C["surface"]))
         p.setColor(group, QPalette.ColorRole.ToolTipText, QColor(C["text"]))
         p.setColor(group, QPalette.ColorRole.WindowText, QColor(C["text"]))
         p.setColor(group, QPalette.ColorRole.Text, QColor(C["text"]))
     app.setPalette(p)
+    # Windows 下 QSS 对 QToolTip 字色常失效，再强制一次工具提示调色板
+    try:
+        from PyQt6.QtWidgets import QToolTip
+        tip_p = QPalette(p)
+        tip_p.setColor(QPalette.ColorRole.Window, QColor(C["surface"]))
+        tip_p.setColor(QPalette.ColorRole.WindowText, QColor(C["text"]))
+        tip_p.setColor(QPalette.ColorRole.Base, QColor(C["surface"]))
+        tip_p.setColor(QPalette.ColorRole.Text, QColor(C["text"]))
+        tip_p.setColor(QPalette.ColorRole.ToolTipBase, QColor(C["surface"]))
+        tip_p.setColor(QPalette.ColorRole.ToolTipText, QColor(C["text"]))
+        QToolTip.setPalette(tip_p)
+    except Exception:
+        pass
     try:
         from core.syntax_highlighter import refresh_all_highlighters
         refresh_all_highlighters()

@@ -30,14 +30,54 @@ _ALLOW = load_allow_from_env()
 _BLOCK_NOISE = load_block_noise_from_env()
 
 
+def _source() -> str:
+    import os
+
+    return (os.environ.get("CB_CAPTURE_SOURCE") or "miniprogram-proxy").strip() or "miniprogram-proxy"
+
+
 def _want(url: str) -> bool:
     return should_capture_url(url, allow_patterns=_ALLOW, block_noise=_BLOCK_NOISE)
+
+
+def _maybe_gunzip(raw: bytes) -> bytes:
+    """若仍是 gzip 魔数，手动解压（兜底 raw_content）。"""
+    if len(raw) >= 2 and raw[0] == 0x1F and raw[1] == 0x8B:
+        import gzip
+
+        try:
+            return gzip.decompress(raw)
+        except Exception:
+            return raw
+    return raw
+
+
+def _message_body(msg) -> bytes | None:
+    """优先取 mitmproxy 已按 Content-Encoding 解码的 content，避免 gzip 原文."""
+    if msg is None:
+        return None
+    data = None
+    try:
+        # .content = 解码后；.raw_content = 线上压缩原文
+        data = msg.content
+    except Exception:
+        data = None
+    if data is None:
+        try:
+            data = msg.raw_content
+        except Exception:
+            data = None
+    if isinstance(data, bytes):
+        return _maybe_gunzip(data)
+    return data
 
 
 def _body_text(raw: bytes | None) -> str:
     if not raw:
         return ""
-    data = raw[:MAX_BODY]
+    if isinstance(raw, str):
+        return raw[:MAX_BODY]
+    data = _maybe_gunzip(raw)[:MAX_BODY]
     try:
         return data.decode("utf-8")
     except UnicodeDecodeError:
@@ -47,15 +87,29 @@ def _body_text(raw: bytes | None) -> str:
             return "(binary) " + base64.b64encode(data[:4096]).decode("ascii")
 
 
-def _headers(h: Any) -> dict[str, str]:
+def _headers(h: Any, *, decoded_body: bool = False) -> dict[str, str]:
     try:
-        return {str(k): str(v) for k, v in h.items()}
+        out = {str(k): str(v) for k, v in h.items()}
     except Exception:
         return {}
+    if decoded_body:
+        # body 已解压，去掉易误导的压缩相关头
+        for name in list(out.keys()):
+            low = name.lower()
+            if low in ("content-encoding", "transfer-encoding"):
+                out.pop(name, None)
+    return out
 
 
 def _emit(payload: dict) -> None:
     print(PREFIX + json.dumps(payload, ensure_ascii=False), flush=True)
+
+
+def _flow_key(flow: http.HTTPFlow) -> str:
+    fid = getattr(flow, "id", None)
+    if fid is not None:
+        return str(fid)
+    return str(id(flow))
 
 
 def request(flow: http.HTTPFlow) -> None:
@@ -64,18 +118,19 @@ def request(flow: http.HTTPFlow) -> None:
     url = flow.request.pretty_url
     if not _want(url):
         return
+    req_body = _message_body(flow.request)
     _emit(
         {
             "phase": "request",
-            "key": getattr(flow, "id", None) or id(flow),
+            "key": _flow_key(flow),
             "method": flow.request.method,
             "url": url,
-            "request_body": _body_text(flow.request.raw_content or flow.request.content),
-            "request_headers": _headers(flow.request.headers),
-            "response_body": "(等待响应…)",
+            "request_body": _body_text(req_body),
+            "request_headers": _headers(flow.request.headers, decoded_body=True),
+            "response_body": "(pending)",
             "response_headers": {},
             "status": 0,
-            "source": "miniprogram-proxy",
+            "source": _source(),
         }
     )
 
@@ -89,17 +144,19 @@ def response(flow: http.HTTPFlow) -> None:
     url = flow.request.pretty_url
     if not _want(url):
         return
+    req_body = _message_body(flow.request)
+    resp_body = _message_body(resp)
     _emit(
         {
             "phase": "response",
-            "key": getattr(flow, "id", None) or id(flow),
+            "key": _flow_key(flow),
             "method": flow.request.method,
             "url": url,
-            "request_body": _body_text(flow.request.raw_content or flow.request.content),
-            "request_headers": _headers(flow.request.headers),
-            "response_body": _body_text(resp.raw_content or resp.content),
-            "response_headers": _headers(resp.headers),
+            "request_body": _body_text(req_body),
+            "request_headers": _headers(flow.request.headers, decoded_body=True),
+            "response_body": _body_text(resp_body),
+            "response_headers": _headers(resp.headers, decoded_body=True),
             "status": int(resp.status_code),
-            "source": "miniprogram-proxy",
+            "source": _source(),
         }
     )

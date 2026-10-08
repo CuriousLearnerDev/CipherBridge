@@ -19,7 +19,23 @@ Extensions → Add → Java → CipherBridge-Upstream.jar
   - 流量（发送到密桥 / 上游变更）
 
 ====================
+发送流量到密桥
+====================
+1. 先打开密桥 GUI（收件箱 127.0.0.1:19528）
+2. Burp → Proxy → HTTP history
+3. 先用鼠标点选一行（可多选），再右键
+4. 菜单中找「密桥 CipherBridge」（有的版本在 Extensions 子菜单下）
+   - 「发送到密桥 · AI分析」— 立即推到密桥
+   - 「先加入扩展列表」— 再到扩展页点「推送列表到密桥」
+5. 若看不到菜单：Extensions 输出里应有
+   CipherBridge: context menu ready (N)
+   没有则说明没选中 HTTP 消息（别只在空白处右键）
+
+====================
 注意
 ====================
-- 右键「发送到密桥」需密桥 GUI 已打开
+- 右键「发送到密桥」需密桥 GUI 已打开（本机收件箱 127.0.0.1:19528）
+- 扩展发往密桥时强制直连，不走 Burp 上游代理（避免加密端劫持）
+- 可在 CipherBridge 页签「流量」点「测试密桥连接」自检
 - 加解密仍走密桥本地代理插件（plugin.py），不在 Burp 内加载配置
+- 改源码后重建: python burp_ext/build.py ，再在 Burp 里 Reload 扩展

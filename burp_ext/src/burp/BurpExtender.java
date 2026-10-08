@@ -7,6 +7,7 @@ import com.sun.net.httpserver.HttpServer;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JLabel;
+import javax.swing.JMenu;
 import javax.swing.JMenuItem;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
@@ -32,11 +33,13 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
+import java.net.Proxy;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.concurrent.Executors;
@@ -70,6 +73,31 @@ public class BurpExtender implements IBurpExtender, IExtensionStateListener, ITa
     private JSpinner portSpinner;
     private JTextArea logArea;
     private DefaultTableModel trafficModel;
+    private JButton pushBtn;
+
+    /**
+     * 待推送队列用静态列表：Burp Reload 后可能短暂存在多个 Extender 实例，
+     * 右键回调与页签按钮若落在不同实例上，实例字段会“加入成功但推送为空”。
+     */
+    private static final List<HeldMessage> PENDING_PUSH =
+            Collections.synchronizedList(new ArrayList<HeldMessage>());
+
+    /** 右键瞬间拷贝的请求/响应，避免临时对象在点击后失效. */
+    private static final class HeldMessage {
+        final byte[] request;
+        final byte[] response;
+        final String host;
+        final int port;
+        final String protocol;
+
+        HeldMessage(byte[] request, byte[] response, String host, int port, String protocol) {
+            this.request = request;
+            this.response = response;
+            this.host = host == null ? "" : host;
+            this.port = port;
+            this.protocol = protocol == null || protocol.isEmpty() ? "https" : protocol;
+        }
+    }
 
     @Override
     public void registerExtenderCallbacks(IBurpExtenderCallbacks callbacks) {
@@ -84,7 +112,7 @@ public class BurpExtender implements IBurpExtender, IExtensionStateListener, ITa
                 buildUi();
                 callbacks.addSuiteTab(this);
                 appendLog("扩展已加载 → 顶部页签「" + TAB_NAME + "」");
-                appendLog("右键流量：发送到密桥");
+                appendLog("用法：Proxy→HTTP history 先选中行 → 右键找「密桥 CipherBridge」");
             });
         } catch (Exception e) {
             callbacks.printError("UI init failed: " + e.getMessage());
@@ -229,9 +257,23 @@ public class BurpExtender implements IBurpExtender, IExtensionStateListener, ITa
 
         JPanel bar = new JPanel(new FlowLayout(FlowLayout.LEFT));
         JButton clear = new JButton("清空列表");
-        clear.addActionListener(e -> trafficModel.setRowCount(0));
+        clear.addActionListener(e -> {
+            trafficModel.setRowCount(0);
+            PENDING_PUSH.clear();
+            refreshPushBtn();
+            appendLogUi("已清空扩展列表 / 待推送队列");
+        });
+        JButton ping = new JButton("测试密桥连接");
+        ping.setToolTipText("直连 127.0.0.1:" + CIPHERBRIDGE_INBOX_PORT + "（不走 Burp 上游代理）");
+        ping.addActionListener(e -> new Thread(this::pingCipherBridgeInbox, "cb-ping-inbox").start());
+        pushBtn = new JButton("推送列表到密桥 (0)");
+        pushBtn.setToolTipText("把右键「先加入扩展列表」的流量推送到密桥 AI 分析");
+        pushBtn.addActionListener(e -> new Thread(this::pushPendingToCipherBridge, "cb-push-pending").start());
         bar.add(clear);
-        bar.add(new JLabel("显示：发送到密桥 / 上游变更"));
+        bar.add(ping);
+        bar.add(pushBtn);
+        bar.add(new JLabel("推荐直接右键「发送到密桥」"));
+        refreshPushBtn();
 
         JPanel wrap = new JPanel(new BorderLayout(6, 6));
         wrap.add(bar, BorderLayout.NORTH);
@@ -260,29 +302,198 @@ public class BurpExtender implements IBurpExtender, IExtensionStateListener, ITa
 
     @Override
     public List<JMenuItem> createMenuItems(IContextMenuInvocation invocation) {
-        final IHttpRequestResponse[] messages = invocation.getSelectedMessages();
         List<JMenuItem> items = new ArrayList<JMenuItem>();
-        if (messages == null || messages.length == 0) {
-            return items;
+        try {
+            IHttpRequestResponse[] selected = invocation.getSelectedMessages();
+            if (selected == null || selected.length == 0) {
+                // 没选中行时不显示；用户需先点选 Proxy History 中的条目
+                return items;
+            }
+
+            // 在 createMenuItems 返回前立刻拷贝字节（此时对象仍有效）
+            final HeldMessage[] held = snapshotMessages(selected);
+            if (held.length == 0) {
+                callbacks.printOutput("CipherBridge: selected "
+                        + selected.length + " but snapshot empty");
+                return items;
+            }
+
+            JMenu menu = new JMenu("密桥 CipherBridge");
+            JMenuItem send = new JMenuItem("发送到密桥 · AI分析 (" + held.length + ")");
+            send.addActionListener(e -> new Thread(() -> {
+                appendLogUi("右键发送 " + held.length + " 条…");
+                boolean ok = sendHeldToCipherBridge(held);
+                appendLogUi(ok ? "右键发送完成" : "右键发送失败");
+            }, "cb-send-flows").start());
+            menu.add(send);
+
+            JMenuItem addOnly = new JMenuItem("先加入扩展列表 (" + held.length + ")");
+            addOnly.addActionListener(e -> new Thread(
+                    () -> addHeldToPluginList(held),
+                    "cb-add-flows").start());
+            menu.add(addOnly);
+
+            items.add(menu);
+            callbacks.printOutput("CipherBridge: context menu ready (" + held.length + ")");
+        } catch (Exception ex) {
+            String err = ex.getMessage() == null ? ex.toString() : ex.getMessage();
+            appendLogUi("创建右键菜单失败: " + err);
+            callbacks.printError("CipherBridge context menu: " + err);
         }
-        JMenuItem send = new JMenuItem("发送到密桥 · AI分析/网页流量 (" + messages.length + ")");
-        send.addActionListener(e -> new Thread(() -> sendSelectedToCipherBridge(messages),
-                "cb-send-flows").start());
-        items.add(send);
         return items;
     }
 
-    // ---- send to CipherBridge GUI ----
+    /** 立即深拷贝选中流量，供菜单点击后使用. */
+    private HeldMessage[] snapshotMessages(IHttpRequestResponse[] selected) {
+        List<HeldMessage> list = new ArrayList<HeldMessage>();
+        for (IHttpRequestResponse msg : selected) {
+            if (msg == null) continue;
+            byte[] req;
+            try {
+                req = msg.getRequest();
+            } catch (Exception e) {
+                continue;
+            }
+            if (req == null || req.length == 0) continue;
+            byte[] reqCopy = Arrays.copyOf(req, req.length);
+            byte[] respCopy = null;
+            try {
+                byte[] resp = msg.getResponse();
+                if (resp != null && resp.length > 0) {
+                    respCopy = Arrays.copyOf(resp, resp.length);
+                }
+            } catch (Exception ignored) {
+            }
+            String host = "";
+            int port = 443;
+            String protocol = "https";
+            try {
+                IHttpService svc = msg.getHttpService();
+                if (svc != null) {
+                    host = svc.getHost();
+                    port = svc.getPort();
+                    protocol = svc.getProtocol();
+                }
+            } catch (Exception ignored) {
+            }
+            // 无 service 时从 Host 头推断
+            if (host == null || host.isEmpty()) {
+                try {
+                    IRequestInfo info = helpers.analyzeRequest(reqCopy);
+                    for (String line : info.getHeaders()) {
+                        if (line != null && line.regionMatches(true, 0, "Host:", 0, 5)) {
+                            host = line.substring(5).trim();
+                            if (host.contains(":")) {
+                                int idx = host.lastIndexOf(':');
+                                try {
+                                    port = Integer.parseInt(host.substring(idx + 1).trim());
+                                } catch (Exception ignored) {
+                                }
+                                host = host.substring(0, idx).trim();
+                            }
+                            break;
+                        }
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+            list.add(new HeldMessage(reqCopy, respCopy, host, port, protocol));
+            if (list.size() >= 50) break;
+        }
+        return list.toArray(new HeldMessage[0]);
+    }
 
-    private void sendSelectedToCipherBridge(IHttpRequestResponse[] messages) {
+    private void refreshPushBtn() {
+        final int n = PENDING_PUSH.size();
+        Runnable r = () -> {
+            if (pushBtn != null) {
+                pushBtn.setText("推送列表到密桥 (" + n + ")");
+            }
+        };
+        if (SwingUtilities.isEventDispatchThread()) r.run();
+        else SwingUtilities.invokeLater(r);
+    }
+
+    private void addHeldToPluginList(HeldMessage[] held) {
+        int n = 0;
+        List<HeldMessage> added = new ArrayList<HeldMessage>();
+        for (HeldMessage msg : held) {
+            if (msg == null || msg.request == null) continue;
+            try {
+                IRequestInfo info = helpers.analyzeRequest(msg.request);
+                String url = buildUrl(msg, info);
+                addTrafficRow("已加入列表", info.getMethod(), url, "pending");
+                added.add(msg);
+                n++;
+            } catch (Exception ex) {
+                addTrafficRow("已加入列表", "-", "-", "skip");
+            }
+        }
+        synchronized (PENDING_PUSH) {
+            PENDING_PUSH.addAll(added);
+            while (PENDING_PUSH.size() > 200) {
+                PENDING_PUSH.remove(0);
+            }
+        }
+        refreshPushBtn();
+        appendLogUi("已加入扩展列表 " + n + " 条，待推送队列=" + PENDING_PUSH.size()
+                + "。也可直接右键用「发送到密桥」。");
+    }
+
+    private void pushPendingToCipherBridge() {
+        HeldMessage[] msgs;
+        synchronized (PENDING_PUSH) {
+            if (PENDING_PUSH.isEmpty()) {
+                appendLogUi("待推送队列为空 (0)。请右键 → 密桥 CipherBridge →「发送到密桥」或「先加入扩展列表」。");
+                refreshPushBtn();
+                return;
+            }
+            msgs = PENDING_PUSH.toArray(new HeldMessage[0]);
+            // 先取出再发；成功后再清。失败则放回，避免“点了就丢”。
+        }
+        appendLogUi("开始推送 " + msgs.length + " 条到密桥…");
+        boolean ok = sendHeldToCipherBridge(msgs);
+        if (ok) {
+            synchronized (PENDING_PUSH) {
+                PENDING_PUSH.removeAll(Arrays.asList(msgs));
+            }
+            refreshPushBtn();
+            appendLogUi("推送完成，剩余待推送=" + PENDING_PUSH.size());
+        } else {
+            appendLogUi("推送失败，队列仍保留 " + PENDING_PUSH.size() + " 条，可重试");
+            refreshPushBtn();
+        }
+    }
+
+    private void pingCipherBridgeInbox() {
+        try {
+            String body = httpGet(
+                    "http://127.0.0.1:" + CIPHERBRIDGE_INBOX_PORT + "/health");
+            appendLogUi("密桥收件箱 OK → " + body);
+            addTrafficRow("PING密桥", "GET", "127.0.0.1:" + CIPHERBRIDGE_INBOX_PORT, "ok");
+        } catch (Exception ex) {
+            String err = ex.getMessage() == null ? ex.toString() : ex.getMessage();
+            appendLogUi("密桥收件箱不可达（请先打开密桥 GUI）: " + err);
+            addTrafficRow("PING密桥", "GET", "127.0.0.1:" + CIPHERBRIDGE_INBOX_PORT, "FAIL");
+        }
+    }
+
+    private boolean sendHeldToCipherBridge(HeldMessage[] messages) {
         try {
             StringBuilder arr = new StringBuilder();
             arr.append("{\"flows\":[");
             int n = 0;
-            for (IHttpRequestResponse msg : messages) {
-                if (msg == null || msg.getRequest() == null) continue;
-                String one = flowToJson(msg);
-                if (one == null) continue;
+            int skipped = 0;
+            for (HeldMessage msg : messages) {
+                if (msg == null || msg.request == null) {
+                    skipped++;
+                    continue;
+                }
+                String one = heldToJson(msg);
+                if (one == null) {
+                    skipped++;
+                    continue;
+                }
                 if (n > 0) arr.append(',');
                 arr.append(one);
                 n++;
@@ -290,38 +501,88 @@ public class BurpExtender implements IBurpExtender, IExtensionStateListener, ITa
             }
             arr.append("]}");
             if (n == 0) {
-                appendLogUi("没有可发送的请求");
-                return;
+                appendLogUi("没有可发送的请求（解析失败）。请重新在 Proxy History 选中后右键。"
+                        + (skipped > 0 ? " skipped=" + skipped : ""));
+                addTrafficRow("SEND→密桥", "-", "-", "empty");
+                return false;
             }
             String resp = httpPostJson(
                     "http://127.0.0.1:" + CIPHERBRIDGE_INBOX_PORT + "/flows", arr.toString());
-            appendLogUi("已发送 " + n + " 条到密桥 → " + resp);
-            for (IHttpRequestResponse msg : messages) {
+            appendLogUi("已发送 " + n + " 条到密桥 → " + resp
+                    + (skipped > 0 ? "（跳过 " + skipped + "）" : ""));
+            int logged = 0;
+            for (HeldMessage msg : messages) {
+                if (logged >= n) break;
                 try {
-                    IRequestInfo info = helpers.analyzeRequest(msg);
-                    addTrafficRow("SEND→密桥", info.getMethod(), String.valueOf(info.getUrl()), "ok");
+                    if (msg == null || msg.request == null) continue;
+                    IRequestInfo info = helpers.analyzeRequest(msg.request);
+                    addTrafficRow("SEND→密桥", info.getMethod(), buildUrl(msg, info), "ok");
+                    logged++;
                 } catch (Exception ignored) {
                 }
             }
+            return true;
         } catch (Exception ex) {
             String err = ex.getMessage() == null ? ex.toString() : ex.getMessage();
-            appendLogUi("发送失败（请先打开密桥）: " + err);
+            appendLogUi("发送失败（请先打开密桥；且扩展已直连收件箱）: " + err);
             addTrafficRow("SEND→密桥", "-", "-", "FAIL");
+            return false;
         }
     }
 
-    private String flowToJson(IHttpRequestResponse msg) {
+    private String buildUrl(HeldMessage msg, IRequestInfo info) {
+        String path = "/";
         try {
-            IRequestInfo reqInfo = helpers.analyzeRequest(msg);
-            byte[] req = msg.getRequest();
+            List<String> headers = info.getHeaders();
+            if (headers != null && !headers.isEmpty()) {
+                String line = headers.get(0);
+                if (line != null) {
+                    String[] parts = line.split(" ");
+                    if (parts.length >= 2) path = parts[1];
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        String host = msg.host;
+        if (host == null || host.isEmpty()) host = "unknown";
+        int port = msg.port;
+        String protocol = msg.protocol;
+        boolean defaultPort = ("http".equalsIgnoreCase(protocol) && port == 80)
+                || ("https".equalsIgnoreCase(protocol) && port == 443);
+        if (defaultPort) {
+            return protocol + "://" + host + path;
+        }
+        return protocol + "://" + host + ":" + port + path;
+    }
+
+    private String heldToJson(HeldMessage msg) {
+        try {
+            byte[] req = msg.request;
+            IRequestInfo reqInfo = helpers.analyzeRequest(req);
             int bodyOff = reqInfo.getBodyOffset();
             String body = "";
-            if (req != null && bodyOff >= 0 && bodyOff < req.length) {
+            if (bodyOff >= 0 && bodyOff < req.length) {
                 body = helpers.bytesToString(Arrays.copyOfRange(req, bodyOff, req.length));
             }
             String method = reqInfo.getMethod();
-            URL u = reqInfo.getUrl();
-            String url = u != null ? u.toString() : "";
+            String url = buildUrl(msg, reqInfo);
+
+            int status = 0;
+            String respBody = "";
+            IResponseInfo respInfo = null;
+            if (msg.response != null && msg.response.length > 0) {
+                respInfo = helpers.analyzeResponse(msg.response);
+                status = respInfo.getStatusCode();
+                int rOff = respInfo.getBodyOffset();
+                if (rOff >= 0 && rOff < msg.response.length) {
+                    respBody = helpers.bytesToString(
+                            Arrays.copyOfRange(msg.response, rOff, msg.response.length));
+                }
+            }
+
+            body = truncateForSend(body, 262144);
+            respBody = truncateForSend(respBody, 262144);
+
             StringBuilder sb = new StringBuilder();
             sb.append('{');
             sb.append("\"method\":\"").append(escapeJson(method)).append("\",");
@@ -330,16 +591,7 @@ public class BurpExtender implements IBurpExtender, IExtensionStateListener, ITa
             appendHeaderArray(sb, reqInfo.getHeaders());
             sb.append(',');
             sb.append("\"request_body\":\"").append(escapeJson(body)).append("\",");
-            byte[] resp = msg.getResponse();
-            int status = 0;
-            String respBody = "";
-            if (resp != null && resp.length > 0) {
-                IResponseInfo respInfo = helpers.analyzeResponse(resp);
-                status = respInfo.getStatusCode();
-                int rOff = respInfo.getBodyOffset();
-                if (rOff >= 0 && rOff < resp.length) {
-                    respBody = helpers.bytesToString(Arrays.copyOfRange(resp, rOff, resp.length));
-                }
+            if (respInfo != null) {
                 sb.append("\"response_headers\":");
                 appendHeaderArray(sb, respInfo.getHeaders());
                 sb.append(',');
@@ -352,8 +604,15 @@ public class BurpExtender implements IBurpExtender, IExtensionStateListener, ITa
             sb.append('}');
             return sb.toString();
         } catch (Exception e) {
+            callbacks.printError("heldToJson: " + e.getMessage());
             return null;
         }
+    }
+
+    private static String truncateForSend(String s, int maxChars) {
+        if (s == null) return "";
+        if (s.length() <= maxChars) return s;
+        return s.substring(0, maxChars) + "\n/* truncated by CipherBridge burp ext */";
     }
 
     private static void appendHeaderArray(StringBuilder sb, List<String> headers) {
@@ -541,10 +800,38 @@ public class BurpExtender implements IBurpExtender, IExtensionStateListener, ITa
         return new String(buf.toByteArray(), StandardCharsets.UTF_8);
     }
 
-    private static String httpPostJson(String url, String json) throws IOException {
-        HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+    /** 直连本机，绝不走 Burp/系统 HTTP 代理（否则上游加密端会劫持发往密桥的请求）。 */
+    private static HttpURLConnection openDirect(String url) throws IOException {
+        HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection(Proxy.NO_PROXY);
         conn.setConnectTimeout(3000);
-        conn.setReadTimeout(8000);
+        conn.setReadTimeout(15000);
+        conn.setInstanceFollowRedirects(false);
+        conn.setUseCaches(false);
+        return conn;
+    }
+
+    private static String readConnBody(HttpURLConnection conn, int code) throws IOException {
+        InputStream in = code >= 400 ? conn.getErrorStream() : conn.getInputStream();
+        if (in == null) return "";
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        byte[] tmp = new byte[4096];
+        int n;
+        while ((n = in.read(tmp)) >= 0) buf.write(tmp, 0, n);
+        in.close();
+        return new String(buf.toByteArray(), StandardCharsets.UTF_8);
+    }
+
+    private static String httpGet(String url) throws IOException {
+        HttpURLConnection conn = openDirect(url);
+        conn.setRequestMethod("GET");
+        int code = conn.getResponseCode();
+        String body = readConnBody(conn, code);
+        if (code >= 400) throw new IOException("HTTP " + code + " " + body);
+        return body;
+    }
+
+    private static String httpPostJson(String url, String json) throws IOException {
+        HttpURLConnection conn = openDirect(url);
         conn.setRequestMethod("POST");
         conn.setDoOutput(true);
         conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
@@ -554,16 +841,7 @@ public class BurpExtender implements IBurpExtender, IExtensionStateListener, ITa
         os.write(data);
         os.close();
         int code = conn.getResponseCode();
-        InputStream in = code >= 400 ? conn.getErrorStream() : conn.getInputStream();
-        String body = "";
-        if (in != null) {
-            ByteArrayOutputStream buf = new ByteArrayOutputStream();
-            byte[] tmp = new byte[4096];
-            int n;
-            while ((n = in.read(tmp)) >= 0) buf.write(tmp, 0, n);
-            in.close();
-            body = new String(buf.toByteArray(), StandardCharsets.UTF_8);
-        }
+        String body = readConnBody(conn, code);
         if (code >= 400) throw new IOException("HTTP " + code + " " + body);
         return body;
     }

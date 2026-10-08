@@ -19,7 +19,7 @@ class _StatusCell(QWidget):
         super().__init__(parent)
         self.setObjectName("homeStatusCell")
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(12, 8, 12, 8)
+        lay.setContentsMargins(8, 6, 8, 6)
         lay.setSpacing(2)
         self._label = QLabel(label)
         self._label.setObjectName("homeMetaLabel")
@@ -54,8 +54,8 @@ class HomeTab(QWidget):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 20, 24, 20)
-        root.setSpacing(12)
+        root.setContentsMargins(8, 8, 8, 8)
+        root.setSpacing(8)
 
         # 顶行：标题 + 入口（无大卡片边框）
         top = QHBoxLayout()
@@ -112,8 +112,8 @@ class HomeTab(QWidget):
         steps = QFrame()
         steps.setObjectName("homeStepsBar")
         sl = QHBoxLayout(steps)
-        sl.setContentsMargins(4, 4, 4, 4)
-        sl.setSpacing(8)
+        sl.setContentsMargins(0, 0, 0, 0)
+        sl.setSpacing(6)
         for num, title, desc, route in (
             ("1", "解析报文", "粘贴抓包，点选字段", "parser"),
             ("2", "组装步骤", "构建器调序并保存", "builder"),
@@ -122,7 +122,7 @@ class HomeTab(QWidget):
             card = QFrame()
             card.setObjectName("homeStepCard")
             cl = QHBoxLayout(card)
-            cl.setContentsMargins(10, 8, 10, 8)
+            cl.setContentsMargins(8, 6, 8, 6)
             cl.setSpacing(8)
             badge = QLabel(num)
             badge.setObjectName("homeStepNum")
@@ -150,8 +150,8 @@ class HomeTab(QWidget):
         topo = QFrame()
         topo.setObjectName("homeTopoPanel")
         tl = QVBoxLayout(topo)
-        tl.setContentsMargins(14, 12, 14, 14)
-        tl.setSpacing(10)
+        tl.setContentsMargins(8, 8, 8, 8)
+        tl.setSpacing(8)
 
         topo_head = QHBoxLayout()
         topo_head.addWidget(self._caption("部署结构"))

@@ -79,7 +79,7 @@ from core.theme import (
     setup_code_editor, setup_mono_field, build_logo_header, style_feedback, style_feedback_box,
     style_step_title, style_compact_button, style_sidebar_aux_button, setup_log_view, setup_main_tabs,
     setup_sub_tabs, repolish_widget,
-    configure_combo_popup, pick_from_list,
+    configure_combo_popup, pick_from_list, strip_op_emoji, op_icon_name,
     LOG_COLORS, HTTP_LOG_COLORS, C,
 )
 
@@ -296,21 +296,21 @@ class ControlPanel(QFrame):
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 12)
-        layout.setSpacing(10)
-
-        build_logo_header(layout)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(6)
 
         # ---- 项目 ----
-        layout.addWidget(self._section_caption("项目"))
+        project_cap = self._section_caption("项目")
+        project_cap.setObjectName("sidebarSectionProject")
+        layout.addWidget(project_cap)
         project_box = QFrame()
-        project_box.setObjectName("proxyRail")
+        project_box.setObjectName("projectRail")
         pj = QVBoxLayout(project_box)
-        pj.setContentsMargins(10, 10, 10, 10)
-        pj.setSpacing(8)
+        pj.setContentsMargins(8, 8, 8, 8)
+        pj.setSpacing(4)
 
         row = QHBoxLayout()
-        row.setSpacing(6)
+        row.setSpacing(4)
         self.profile_combo = QComboBox()
         self.profile_combo.currentTextChanged.connect(self._on_profile_changed)
         row.addWidget(self.profile_combo, 1)
@@ -336,27 +336,26 @@ class ControlPanel(QFrame):
         self.project_empty_hint.hide()
         pj.addWidget(self.project_empty_hint)
 
+        # 角色摘要改挂到下拉 tip，不再占位显示
         self.profile_role_label = QLabel("")
-        style_muted_label(self.profile_role_label)
-        self.profile_role_label.setWordWrap(True)
-        pj.addWidget(self.profile_role_label)
+        self.profile_role_label.hide()
         self.load_mode_combo = QComboBox(self)
         self.load_mode_combo.addItem("plugin.py 直接", "plugin")
         self.load_mode_combo.addItem("main.py 框架", "main")
         self.load_mode_combo.hide()
         layout.addWidget(project_box)
 
-        # ---- 解密端 ----
+        # ---- 解密端：状态+启动同行，端口横排，工具一行 ----
         self.decrypt_section = self._section_caption("解密端")
         layout.addWidget(self.decrypt_section)
         self.decrypt_grp = QFrame()
         self.decrypt_grp.setObjectName("proxyRail")
         d = QVBoxLayout(self.decrypt_grp)
-        d.setContentsMargins(10, 10, 10, 10)
-        d.setSpacing(10)
+        d.setContentsMargins(8, 8, 8, 8)
+        d.setSpacing(6)
 
         d_head = QHBoxLayout()
-        d_head.setSpacing(8)
+        d_head.setSpacing(6)
         self.decrypt_dot = QFrame()
         self.decrypt_dot.setObjectName("statusDot")
         self.decrypt_dot.setProperty("running", "false")
@@ -365,53 +364,79 @@ class ControlPanel(QFrame):
         self.decrypt_status.setObjectName("proxyStatusText")
         style_status_label(self.decrypt_status, running=False)
         d_head.addWidget(self.decrypt_status, 1)
+        self.decrypt_start_btn = QPushButton("启动")
+        self.decrypt_start_btn.setToolTip("启动解密端；运行中再点即停止")
+        self.decrypt_start_btn.setMinimumWidth(72)
+        d_head.addWidget(self.decrypt_start_btn)
         d.addLayout(d_head)
 
-        self.decrypt_start_btn = QPushButton("启动解密")
-        self.decrypt_start_btn.setToolTip("启动解密端；运行中再点即停止")
-        self.decrypt_start_btn.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
-        d.addWidget(self.decrypt_start_btn)
-
         d_ports = QHBoxLayout()
-        d_ports.setSpacing(8)
+        d_ports.setSpacing(6)
         self.decrypt_port = QSpinBox()
         self.decrypt_port.setRange(1024, 65535)
         self.decrypt_port.setValue(8083)
         self.decrypt_port.setToolTip("浏览器/客户端代理指向此端口（解密端）")
-        d_ports.addLayout(self._port_field("监听", self.decrypt_port), 1)
+        d_ports.addLayout(self._port_inline("监听", self.decrypt_port), 1)
         self.burp_port = QSpinBox()
         self.burp_port.setRange(1024, 65535)
         self.burp_port.setValue(8080)
         self.burp_port.setToolTip("解密后的明文转发到此 Burp 端口")
-        d_ports.addLayout(self._port_field("Burp", self.burp_port), 1)
+        d_ports.addLayout(self._port_inline("Burp", self.burp_port), 1)
         d.addLayout(d_ports)
 
-        d_aux = QHBoxLayout()
-        d_aux.setSpacing(2)
+        d_tools = QHBoxLayout()
+        d_tools.setSpacing(4)
+        self.browser_open_btn = QPushButton("浏览器")
+        self.browser_open_btn.setToolTip(
+            "类似 Burp 内置浏览器：流量走当前解密端，登录态默认长期复用。"
+        )
+        self.browser_open_btn.clicked.connect(self._launch_proxy_browser)
+        d_tools.addWidget(self.browser_open_btn)
         self.decrypt_log_btn = self._make_icon_toolbtn(
             "log", "解密端日志", lambda: self.view_decrypt_log.emit()
         )
-        d_aux.addWidget(self.decrypt_log_btn)
-        self.browser_open_btn = self._make_icon_toolbtn(
-            "browser", "打开代理浏览器（经解密端）", self._launch_proxy_browser
-        )
-        d_aux.addWidget(self.browser_open_btn)
-        d_more = self._make_icon_toolbtn("more", "匹配规则 / HTTPS 证书")
+        d_tools.addWidget(self.decrypt_log_btn)
+        d_more = self._make_icon_toolbtn("more", "匹配规则 / 浏览器选项 / HTTPS 证书")
         d_more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         d_menu = QMenu(self)
         d_menu.addAction("匹配规则…", self._edit_match_rules)
+        d_menu.addSeparator()
+        self._act_browser_chrome = d_menu.addAction("浏览器使用本机 Chrome")
+        self._act_browser_chrome.setCheckable(True)
+        self._act_browser_chrome.setToolTip(
+            "勾选后优先用本机 Google Chrome；失败则回退内置 Chromium。\n"
+            "仍使用密桥独立 Profile，不占用日常 Chrome 用户目录。"
+        )
+        self._act_browser_temp = d_menu.addAction("临时会话（不记住登录）")
+        self._act_browser_temp.setCheckable(True)
+        self._act_browser_temp.setToolTip(
+            "默认关闭=记录模式（像 Burp 一样记住 Cookie/登录）。\n"
+            "勾选后每次临时 Profile，关闭即清理。"
+        )
+        try:
+            from core.ai_config import load_ai_config, normalize_browser_channel
+
+            bcfg = load_ai_config().get("browser", {}) or {}
+            self._act_browser_chrome.setChecked(
+                normalize_browser_channel(bcfg.get("browser_channel")) == "chrome"
+            )
+            self._act_browser_temp.setChecked(not bool(bcfg.get("record_mode", True)))
+        except Exception:
+            self._act_browser_chrome.setChecked(False)
+            self._act_browser_temp.setChecked(False)
+        self._act_browser_chrome.toggled.connect(self._on_browser_chrome_toggled)
+        self._act_browser_temp.toggled.connect(self._on_browser_temp_toggled)
+        d_menu.addSeparator()
         d_menu.addAction("安装 HTTPS 证书…", self._install_https_cert)
         d_more.setMenu(d_menu)
-        d_aux.addWidget(d_more)
-        d_aux.addStretch()
+        d_tools.addWidget(d_more)
+        d_tools.addStretch(1)
         self.cert_status = QLabel(cert_status_text())
         self.cert_status.setObjectName("proxyCertHint")
         style_muted_label(self.cert_status)
         self.cert_status.setWordWrap(False)
-        d_aux.addWidget(self.cert_status)
-        d.addLayout(d_aux)
+        d_tools.addWidget(self.cert_status)
+        d.addLayout(d_tools)
 
         self._proxy_browser = None
         layout.addWidget(self.decrypt_grp)
@@ -423,11 +448,11 @@ class ControlPanel(QFrame):
         self.encrypt_grp = QFrame()
         self.encrypt_grp.setObjectName("proxyRail")
         e = QVBoxLayout(self.encrypt_grp)
-        e.setContentsMargins(10, 10, 10, 10)
-        e.setSpacing(10)
+        e.setContentsMargins(8, 8, 8, 8)
+        e.setSpacing(6)
 
         e_head = QHBoxLayout()
-        e_head.setSpacing(8)
+        e_head.setSpacing(6)
         self.encrypt_dot = QFrame()
         self.encrypt_dot.setObjectName("statusDot")
         self.encrypt_dot.setProperty("running", "false")
@@ -436,48 +461,45 @@ class ControlPanel(QFrame):
         self.encrypt_status.setObjectName("proxyStatusText")
         style_status_label(self.encrypt_status, running=False)
         e_head.addWidget(self.encrypt_status, 1)
+        self.encrypt_start_btn = QPushButton("启动")
+        self.encrypt_start_btn.setToolTip("启动加密端；运行中再点即停止")
+        self.encrypt_start_btn.setMinimumWidth(72)
+        e_head.addWidget(self.encrypt_start_btn)
         e.addLayout(e_head)
 
-        self.encrypt_start_btn = QPushButton("启动加密")
-        self.encrypt_start_btn.setToolTip("启动加密端；运行中再点即停止")
-        self.encrypt_start_btn.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
-        e.addWidget(self.encrypt_start_btn)
-
+        e_row = QHBoxLayout()
+        e_row.setSpacing(4)
         self.encrypt_port = QSpinBox()
         self.encrypt_port.setRange(1024, 65535)
         self.encrypt_port.setValue(8081)
-        e.addLayout(self._port_field("端口", self.encrypt_port))
-
-        e_aux = QHBoxLayout()
-        e_aux.setSpacing(2)
+        e_row.addLayout(self._port_inline("端口", self.encrypt_port), 1)
         self.encrypt_log_btn = self._make_icon_toolbtn(
             "log", "加密端日志", lambda: self.view_encrypt_log.emit()
         )
-        e_aux.addWidget(self.encrypt_log_btn)
-        e_aux.addStretch()
-        e.addLayout(e_aux)
+        e_row.addWidget(self.encrypt_log_btn)
+        e.addLayout(e_row)
 
         layout.addWidget(self.encrypt_grp)
         self.encrypt_start_btn.clicked.connect(self._toggle_encrypt)
 
-        style_button(self.decrypt_start_btn, "primary")
-        style_button(self.encrypt_start_btn, "default")
-        set_btn_icon(self.decrypt_start_btn, "play")
-        set_btn_icon(self.encrypt_start_btn, "play")
+        style_button(self.decrypt_start_btn, "primary", size="sm")
+        style_button(self.browser_open_btn, "ghost", size="sm")
+        style_button(self.encrypt_start_btn, "primary", size="sm")
+        set_btn_icon(self.decrypt_start_btn, "play", size=12)
+        set_btn_icon(self.browser_open_btn, "browser", size=12)
+        set_btn_icon(self.encrypt_start_btn, "play", size=12)
 
-        # ---- Burp 连接检测（风格与加解密端一致：日志用图标打开）----
+        # ---- Burp 连接：状态+测试+日志同行 ----
         self.burp_link_section = self._section_caption("Burp 连接")
         layout.addWidget(self.burp_link_section)
         self.burp_link_grp = QFrame()
         self.burp_link_grp.setObjectName("proxyRail")
         bl = QVBoxLayout(self.burp_link_grp)
-        bl.setContentsMargins(10, 10, 10, 10)
-        bl.setSpacing(10)
+        bl.setContentsMargins(8, 8, 8, 8)
+        bl.setSpacing(6)
 
         bl_head = QHBoxLayout()
-        bl_head.setSpacing(8)
+        bl_head.setSpacing(6)
         self.burp_link_dot = QFrame()
         self.burp_link_dot.setObjectName("statusDot")
         self.burp_link_dot.setProperty("running", "false")
@@ -486,30 +508,21 @@ class ControlPanel(QFrame):
         self.burp_link_status.setObjectName("proxyStatusText")
         style_status_label(self.burp_link_status, running=False)
         bl_head.addWidget(self.burp_link_status, 1)
-        bl.addLayout(bl_head)
-
-        self.burp_test_btn = QPushButton("测试连接")
+        self.burp_test_btn = QPushButton("探测")
         self.burp_test_btn.setToolTip(
-            "检测：Burp 监听端口、CipherBridge 扩展 API、加密端端口"
+            "探测：Burp 监听端口、CipherBridge 扩展 API、加密端端口"
         )
-        self.burp_test_btn.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
+        self.burp_test_btn.setMinimumWidth(72)
         self.burp_test_btn.clicked.connect(self._test_burp_connection)
-        style_button(self.burp_test_btn, "default")
-        set_btn_icon(self.burp_test_btn, "test")
-        bl.addWidget(self.burp_test_btn)
-
-        bl_aux = QHBoxLayout()
-        bl_aux.setSpacing(2)
+        style_button(self.burp_test_btn, "default", size="sm")
+        set_btn_icon(self.burp_test_btn, "search", size=12)
+        bl_head.addWidget(self.burp_test_btn)
         self.burp_link_log_btn = self._make_icon_toolbtn(
             "log", "Burp 连接日志", self._open_burp_link_log
         )
-        bl_aux.addWidget(self.burp_link_log_btn)
-        bl_aux.addStretch()
-        bl.addLayout(bl_aux)
+        bl_head.addWidget(self.burp_link_log_btn)
+        bl.addLayout(bl_head)
 
-        # 隐藏缓冲，供独立日志窗共享文档（与加解密端日志同交互）
         self.burp_link_log = QPlainTextEdit()
         self.burp_link_log.setReadOnly(True)
         self.burp_link_log.setMaximumBlockCount(200)
@@ -520,6 +533,7 @@ class ControlPanel(QFrame):
 
         self._update_project_ui_state()
         layout.addStretch(1)
+        build_logo_header(layout)
 
     @staticmethod
     def _section_caption(text: str) -> QLabel:
@@ -531,12 +545,24 @@ class ControlPanel(QFrame):
     def _port_field(label: str, spin: QSpinBox) -> QVBoxLayout:
         col = QVBoxLayout()
         col.setContentsMargins(0, 0, 0, 0)
-        col.setSpacing(4)
+        col.setSpacing(2)
         lbl = QLabel(label)
         lbl.setObjectName("proxyFieldLabel")
         col.addWidget(lbl)
         col.addWidget(spin)
         return col
+
+    @staticmethod
+    def _port_inline(label: str, spin: QSpinBox) -> QHBoxLayout:
+        """标签与端口横排，节省侧栏高度。"""
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+        lbl = QLabel(label)
+        lbl.setObjectName("proxyFieldLabel")
+        row.addWidget(lbl)
+        row.addWidget(spin, 1)
+        return row
 
     def _make_icon_toolbtn(self, icon_name: str, tip: str, slot=None) -> QToolButton:
         """侧栏小图标按钮（无文字）."""
@@ -656,21 +682,32 @@ class ControlPanel(QFrame):
         return "运行中" in (self.encrypt_status.text() or "")
 
     def _sync_toggle_btn(self, btn: QPushButton, *, running: bool, role: str) -> None:
-        """启停合一：切换文案 / 样式 / 图标."""
+        """启停合一：切换文案 / 样式 / 图标（侧栏紧凑按钮）。"""
         if running:
             btn.setText("停止")
-            style_button(btn, "danger")
-            set_btn_icon(btn, "stop")
+            style_button(btn, "danger", size="sm")
+            set_btn_icon(btn, "stop", size=12)
             btn.setToolTip(f"停止{role}")
         else:
-            btn.setText(f"启动{role.replace('端', '')}" if role.endswith("端") else f"启动{role}")
-            # 解密端主操作；加密端次要，避免双主色抢戏
-            style_button(btn, "primary" if "解密" in role else "default")
-            set_btn_icon(btn, "play")
+            btn.setText("启动")
+            style_button(btn, "primary", size="sm")
+            set_btn_icon(btn, "play", size=12)
             btn.setToolTip(f"启动{role}；运行中再点即停止")
 
+
+    def _set_proxy_rail_active(self, section, grp, active: bool) -> None:
+        """解密/加密区始终显示；未选角色时灰显且不可操作。"""
+        if section is not None:
+            section.setVisible(True)
+        if grp is None:
+            return
+        grp.setVisible(True)
+        grp.setEnabled(bool(active))
+        grp.setProperty("inactive", "false" if active else "true")
+        repolish_widget(grp)
+
     def _update_project_ui_state(self) -> None:
-        """无项目时禁用启动按钮并显示引导；按角色显隐解密/加密区."""
+        """无项目时禁用启动；按角色灰显解密/加密区（不隐藏）。"""
         count = self.profile_combo.count()
         name = self.profile_combo.currentText()
         has_project = count > 0 and bool(name)
@@ -683,20 +720,21 @@ class ControlPanel(QFrame):
         self.project_empty_hint.setVisible(count == 0)
         if count == 0:
             self.profile_role_label.setText("")
+            self.profile_combo.setToolTip("")
 
-        # 无对应角色则折叠；若仍在运行则保留，便于停止
-        show_decrypt = has_decrypt or dec_running or not has_project
-        show_encrypt = has_encrypt or enc_running
-        self.decrypt_grp.setVisible(show_decrypt)
-        self.encrypt_grp.setVisible(show_encrypt)
-        if hasattr(self, "decrypt_section"):
-            self.decrypt_section.setVisible(show_decrypt)
-        if hasattr(self, "encrypt_section"):
-            self.encrypt_section.setVisible(show_encrypt)
+        # 始终保留两块区域：无角色时灰显；运行中保持可操作以便停止
+        dec_active = (has_project and has_decrypt) or dec_running
+        enc_active = (has_project and has_encrypt) or enc_running
+        self._set_proxy_rail_active(
+            getattr(self, "decrypt_section", None), self.decrypt_grp, dec_active
+        )
+        self._set_proxy_rail_active(
+            getattr(self, "encrypt_section", None), self.encrypt_grp, enc_active
+        )
 
         # 运行中始终可点停止；未运行需有项目且具备角色
-        self.decrypt_start_btn.setEnabled((has_project and has_decrypt) or dec_running)
-        self.encrypt_start_btn.setEnabled((has_project and has_encrypt) or enc_running)
+        self.decrypt_start_btn.setEnabled(dec_active)
+        self.encrypt_start_btn.setEnabled(enc_active)
         self._sync_toggle_btn(self.decrypt_start_btn, running=dec_running, role="解密端")
         self._sync_toggle_btn(self.encrypt_start_btn, running=enc_running, role="加密端")
         self._set_status_dot(getattr(self, "decrypt_dot", None), dec_running)
@@ -772,6 +810,7 @@ class ControlPanel(QFrame):
                 full += f" | 匹配: {match_txt}"
             self.profile_role_label.setText(short)
             self.profile_role_label.setToolTip(full)
+            self.profile_combo.setToolTip(full)
 
             # 加载插件代码
             plugin_path = os.path.join(PLUGINS_DIR, plugin, "plugin.py")
@@ -835,9 +874,12 @@ class ControlPanel(QFrame):
             shared_pipeline._notify()
         except yaml.YAMLError as e:
             logging.warning("profile YAML 解析失败 %s: %s", path, e)
-            self.profile_role_label.setText(f"配置错误: {name}.yaml 格式无效")
+            tip = f"配置错误: {name}.yaml 格式无效"
+            self.profile_role_label.setText(tip)
+            self.profile_combo.setToolTip(tip)
         except Exception:
             self.profile_role_label.setText("")
+            self.profile_combo.setToolTip("")
         self._update_project_ui_state()
 
     def set_decrypt_running(self, r: bool):
@@ -887,33 +929,129 @@ class ControlPanel(QFrame):
         port = self.decrypt_port.value()
         running = bool(self._proxy_browser and self._proxy_browser.isRunning())
         if running:
-            btn.setToolTip(f"代理浏览器运行中 → :{port}（关窗退出）")
+            btn.setText("运行中")
+            btn.setToolTip(f"已打开 → 解密端 :{port}（关闭浏览器窗口即退出）")
             btn.setEnabled(False)
         elif self._decrypt_is_running():
-            btn.setToolTip(f"打开代理浏览器（经解密端 :{port}）")
+            btn.setText("浏览器")
+            btn.setToolTip(f"类似 Burp：打开后流量自动走解密端 :{port}，登录态默认记住")
             btn.setEnabled(True)
         else:
-            btn.setToolTip(f"打开代理浏览器（将代理到 :{port}，建议先启动解密端）")
+            btn.setText("浏览器")
+            btn.setToolTip(
+                f"将先提示启动解密端，再打开浏览器（代理 :{port}）"
+            )
             btn.setEnabled(True)
+
+    def _save_browser_proxy_pref(self, **updates) -> None:
+        try:
+            from core.ai_config import load_ai_config, save_ai_config
+
+            cfg = load_ai_config()
+            browser = cfg.get("browser") if isinstance(cfg.get("browser"), dict) else {}
+            browser = dict(browser)
+            browser.update(updates)
+            cfg["browser"] = browser
+            save_ai_config(cfg)
+        except Exception:
+            pass
+
+    def _on_browser_chrome_toggled(self, checked: bool) -> None:
+        self._save_browser_proxy_pref(
+            browser_channel="chrome" if checked else "chromium"
+        )
+
+    def _on_browser_temp_toggled(self, checked: bool) -> None:
+        # 勾选「临时会话」= 不记录
+        self._save_browser_proxy_pref(record_mode=not bool(checked))
+
+    def _proxy_browser_options(self) -> tuple[bool, str]:
+        """返回 (record_mode, browser_channel)。默认像 Burp：记住登录。"""
+        record_mode = True
+        browser_channel = "chromium"
+        act_temp = getattr(self, "_act_browser_temp", None)
+        act_chrome = getattr(self, "_act_browser_chrome", None)
+        if act_temp is not None:
+            record_mode = not act_temp.isChecked()
+        if act_chrome is not None:
+            browser_channel = "chrome" if act_chrome.isChecked() else "chromium"
+        else:
+            try:
+                from core.ai_config import load_ai_config, normalize_browser_channel
+
+                b = load_ai_config().get("browser", {}) or {}
+                record_mode = bool(b.get("record_mode", True))
+                browser_channel = normalize_browser_channel(b.get("browser_channel"))
+            except Exception:
+                pass
+        return record_mode, browser_channel
 
     def _launch_proxy_browser(self) -> None:
         if self._proxy_browser and self._proxy_browser.isRunning():
-            QMessageBox.information(self, "提示", "代理浏览器已在运行")
+            QMessageBox.information(self, "提示", "浏览器已在运行，关闭窗口即可退出")
             return
+
         if not self._decrypt_is_running():
-            reply = QMessageBox.question(
-                self,
-                "解密端未启动",
-                "建议先启动解密端，浏览器才会走加解密代理。\n\n仍要打开吗？",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Question)
+            box.setWindowTitle("打开浏览器")
+            box.setText(
+                "解密端尚未启动。\n\n"
+                "Burp 风格用法：先有代理，再开浏览器，流量才会进解密/Burp。"
             )
-            if reply != QMessageBox.StandardButton.Yes:
+            start_btn = box.addButton("启动解密并打开", QMessageBox.ButtonRole.AcceptRole)
+            open_btn = box.addButton("仍直接打开", QMessageBox.ButtonRole.ActionRole)
+            box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+            box.exec()
+            clicked = box.clickedButton()
+            if clicked is None or clicked not in (start_btn, open_btn):
                 return
+            if clicked == start_btn:
+                if not self._decrypt_is_running():
+                    self._toggle_decrypt()
+                # 解密端是异步拉起的，等端口就绪再开浏览器
+                try:
+                    import time
+                    from PyQt6.QtWidgets import QApplication
+                    from core.launch_checks import is_port_in_use
+
+                    wait_port = int(self.decrypt_port.value())
+                    ready = False
+                    for _ in range(40):
+                        QApplication.processEvents()
+                        if is_port_in_use(wait_port, "127.0.0.1"):
+                            ready = True
+                            break
+                        time.sleep(0.1)
+                    if not ready:
+                        QMessageBox.warning(
+                            self,
+                            "无法打开",
+                            f"解密端端口 :{wait_port} 尚未就绪，请确认解密已启动后再点「打开浏览器」。",
+                        )
+                        return
+                except Exception:
+                    if not self._decrypt_is_running():
+                        QMessageBox.warning(
+                            self,
+                            "无法打开",
+                            "解密端未能启动，请检查端口占用或项目配置后再试。",
+                        )
+                        return
+
         port = int(self.decrypt_port.value())
         url = self._proxy_browser_home_url()
+        record_mode, browser_channel = self._proxy_browser_options()
         from core.proxy_browser import ProxyBrowserWorker
 
-        self._proxy_browser = ProxyBrowserWorker(port, url, parent=self)
+        self._proxy_browser = ProxyBrowserWorker(
+            port,
+            url,
+            record_mode=record_mode,
+            browser_channel=browser_channel,
+            fallback_chromium=True,
+            parent=self,
+        )
         self._proxy_browser.log.connect(
             lambda m: log_signal.append_log.emit("INFO", f"[浏览器] {m}")
         )
@@ -921,9 +1059,11 @@ class ControlPanel(QFrame):
         self._proxy_browser.stopped.connect(self._on_proxy_browser_stopped)
         self._proxy_browser.start()
         self._refresh_browser_hint()
+        mode = "记住登录" if record_mode else "临时会话"
+        eng = "本机 Chrome" if browser_channel == "chrome" else "Chromium"
         log_signal.append_log.emit(
             "INFO",
-            f"代理浏览器已指定代理 127.0.0.1:{port}（解密端监听端口，非 Burp :8080）",
+            f"已打开浏览器 → 127.0.0.1:{port}（{eng} · {mode}）",
         )
 
     def _stop_proxy_browser(self) -> None:
@@ -1382,13 +1522,13 @@ class RequestParserTab(QWidget):
 
         type_display = QLineEdit()
         type_display.setReadOnly(True)
-        type_display.setText(current_op["type"])
+        type_display.setText(strip_op_emoji(current_op["type"]))
 
         def pick_op_type():
             selected = pick_from_list(dlg, "选择操作类型", sections=op_sections)
             if selected:
                 current_op["type"] = selected
-                type_display.setText(selected)
+                type_display.setText(strip_op_emoji(selected))
                 rebuild_params(selected)
                 do_test()
 
@@ -3075,7 +3215,13 @@ class VisualBuilderTab(QWidget):
 
         title_row = QHBoxLayout()
         title_row.setSpacing(4)
-        type_label = QLabel(f"#{step_idx + 1}  {op_type}")
+        op_ic = icon(op_icon_name(op_type), 16)
+        if not op_ic.isNull():
+            ic_lbl = QLabel()
+            ic_lbl.setPixmap(op_ic.pixmap(QSize(16, 16)))
+            ic_lbl.setFixedSize(18, 18)
+            title_row.addWidget(ic_lbl)
+        type_label = QLabel(f"#{step_idx + 1}  {strip_op_emoji(op_type)}")
         style_step_title(type_label)
         title_row.addWidget(type_label, 1)
 
@@ -3755,10 +3901,10 @@ class CryptoTab(QWidget):
         self.enc_btn.clicked.connect(self._encrypt)
         self.dec_btn = QPushButton("← 解密")
         self.dec_btn.clicked.connect(self._decrypt)
-        style_button(self.enc_btn, "primary")
-        style_button(self.dec_btn, "ghost")
-        set_btn_icon(self.enc_btn, "encrypt")
-        set_btn_icon(self.dec_btn, "decrypt")
+        style_button(self.enc_btn, "primary", size="sm")
+        style_button(self.dec_btn, "ghost", size="sm")
+        set_btn_icon(self.enc_btn, "encrypt", size=14)
+        set_btn_icon(self.dec_btn, "decrypt", size=14)
         br.addWidget(self.enc_btn)
         br.addWidget(self.dec_btn)
         br.addStretch()
@@ -4230,17 +4376,21 @@ class MainWindow(QMainWindow):
     def _build_ui(self):
         c = QWidget()
         self.setCentralWidget(c)
-        s = QSplitter(Qt.Orientation.Horizontal)
+        root = QVBoxLayout(c)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
         self.control = ControlPanel()
         self.control.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
-        s.addWidget(self.control)
         self.tabs = QTabWidget()
         setup_main_tabs(self.tabs)
         self.home_tab = HomeTab()
-        # 主页 → AI 分析 → 其余
+        # 左：主页 / AI 分析；右：解析器…设置（自定义导航条分组）
         self._tab_icon_names = (
             "home", "ai", "parser", "builder", "plugin", "analyzer", "setting",
         )
+        self._tab_nav_left = ("主页", "AI 分析")
+        self._tab_nav_right = ("解析器", "构建器", "扩展", "识别", "设置")
         self.tabs.addTab(self.home_tab, "主页")
         self.ai_lab_tab = AILabTab()
         self.tabs.addTab(self.ai_lab_tab, "AI 分析")
@@ -4271,7 +4421,6 @@ class MainWindow(QMainWindow):
         for i, tip in enumerate(_tab_tips):
             if i < self.tabs.count():
                 self.tabs.setTabToolTip(i, tip)
-        self.refresh_tab_icons()
         self.home_tab.bind_tabs(self.tabs, {
             "parser": self.parser_tab,
             "builder": self.visual_builder_tab,
@@ -4283,21 +4432,78 @@ class MainWindow(QMainWindow):
             "log": self.log_tab,
             "settings": self.settings_hub_tab,
         })
-        # 工作区嵌板（直角、无阴影，少一点模板感）
+
+        # 顶栏通栏：消掉侧栏旁的左侧空白
+        root.addWidget(self._build_main_tab_nav())
+
+        s = QSplitter(Qt.Orientation.Horizontal)
+        s.addWidget(self.control)
         work = QFrame()
         work.setObjectName("workspacePane")
         work_layout = QVBoxLayout(work)
         work_layout.setContentsMargins(0, 0, 0, 0)
         work_layout.setSpacing(0)
-        work_layout.addWidget(self.tabs)
+        work_layout.addWidget(self.tabs, 1)
         s.addWidget(work)
         s.setSizes([248, 1032])
         s.setStretchFactor(0, 0)
         s.setStretchFactor(1, 1)
-        ml = QHBoxLayout(c)
-        ml.setContentsMargins(0, 0, 0, 0)
-        ml.setSpacing(0)
-        ml.addWidget(s)
+        root.addWidget(s, 1)
+        self.refresh_tab_icons()
+
+    def _build_main_tab_nav(self) -> QFrame:
+        """自定义主导航：左核心（主页/AI）+ 右工具（解析器…设置）。"""
+        nav = QFrame()
+        nav.setObjectName("mainTabNav")
+        row = QHBoxLayout(nav)
+        # 左侧与侧栏内容对齐，勿留大块空边
+        row.setContentsMargins(10, 0, 8, 0)
+        row.setSpacing(2)
+
+        self._nav_buttons: list[QPushButton] = []
+        left_n = len(getattr(self, "_tab_nav_left", ("主页", "AI 分析")))
+        tips = [
+            self.tabs.tabToolTip(i) if i < self.tabs.count() else ""
+            for i in range(self.tabs.count())
+        ]
+
+        def _add_btn(idx: int) -> None:
+            text = self.tabs.tabText(idx) if idx < self.tabs.count() else ""
+            btn = QPushButton(text)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            btn.setFlat(True)
+            if idx < len(tips) and tips[idx]:
+                btn.setToolTip(tips[idx])
+            btn.clicked.connect(lambda _=False, i=idx: self.tabs.setCurrentIndex(i))
+            self._nav_buttons.append(btn)
+            row.addWidget(btn, 0)
+
+        for i in range(left_n):
+            _add_btn(i)
+        # 组间细分割，避免中间像「缺了两个 Tab」的空洞感
+        sep = QFrame()
+        sep.setObjectName("mainTabNavSep")
+        sep.setFrameShape(QFrame.Shape.NoFrame)
+        sep.setFixedWidth(1)
+        sep.setFixedHeight(18)
+        row.addSpacing(10)
+        row.addWidget(sep, 0, Qt.AlignmentFlag.AlignVCenter)
+        row.addStretch(1)
+        for i in range(left_n, self.tabs.count()):
+            _add_btn(i)
+        return nav
+
+    def _sync_main_tab_nav(self, index: int | None = None) -> None:
+        """同步自定义导航选中态。"""
+        btns = getattr(self, "_nav_buttons", None) or []
+        if not btns:
+            return
+        cur = self.tabs.currentIndex() if index is None else index
+        for i, btn in enumerate(btns):
+            active = i == cur
+            btn.setProperty("navActive", "true" if active else "false")
+            repolish_widget(btn)
 
     def open_settings_hub(self, page: int | None = None) -> None:
         """打开设置中心；page 见 SettingsHubTab.PAGE_*."""
@@ -4331,20 +4537,26 @@ class MainWindow(QMainWindow):
         self.log_tab.append(level, msg, channel)
 
     def refresh_tab_icons(self) -> None:
-        """主题/切换后刷新 Tab 图标：选中用主色，其余用次级灰。"""
+        """主题/切换后刷新导航图标：选中用主色，其余用次级灰。"""
         names = getattr(self, "_tab_icon_names", None) or (
             "home", "ai", "parser", "builder", "plugin", "analyzer", "setting",
         )
         current = self.tabs.currentIndex()
+        btns = getattr(self, "_nav_buttons", None) or []
         for idx, name in enumerate(names):
-            if idx >= self.tabs.count():
-                break
-            # 解析器/构建器为彩色自定义图标，保持原色
+            if name is None:
+                continue
             if name in ("parser", "builder"):
-                self.tabs.setTabIcon(idx, icon(name))
+                ic = icon(name)
             else:
                 tint = C["primary"] if idx == current else C["text_dim"]
-                self.tabs.setTabIcon(idx, icon(name, tint=tint))
+                ic = icon(name, tint=tint)
+            if idx < self.tabs.count():
+                self.tabs.setTabIcon(idx, ic)
+            if idx < len(btns):
+                btns[idx].setIcon(ic)
+                btns[idx].setIconSize(QSize(16, 16))
+        self._sync_main_tab_nav(current)
 
     def _has_project(self) -> bool:
         c = self.control.profile_combo
@@ -4896,47 +5108,7 @@ class MainWindow(QMainWindow):
 
 
 def main():
-    import argparse
     import traceback
-
-    parser = argparse.ArgumentParser(description="密桥 CipherBridge")
-    parser.add_argument(
-        "--qt",
-        action="store_true",
-        help="使用经典 PyQt 界面（非前端壳）",
-    )
-    parser.add_argument(
-        "--web",
-        action="store_true",
-        help="使用 Vue 前端壳（QWebEngine）",
-    )
-    args, _unknown = parser.parse_known_args()
-
-    # 默认经典 PyQt；可用 --web 或 settings gui.ui=web 开前端壳
-    use_web = False
-    if args.web:
-        use_web = True
-    elif args.qt:
-        use_web = False
-    else:
-        try:
-            from core.app_settings import load_settings
-            ui = str((load_settings().get("gui") or {}).get("ui", "qt")).lower()
-            use_web = ui == "web"
-        except Exception:
-            use_web = False
-
-    if use_web:
-        try:
-            from core.web_shell import run_web_shell
-            sys.exit(run_web_shell())
-        except Exception as e:
-            traceback.print_exc()
-            try:
-                # 前端启动失败时回退经典界面
-                print(f"[密桥] 前端壳启动失败，回退经典界面: {e}", file=sys.stderr)
-            except Exception:
-                pass
 
     try:
         app = QApplication(sys.argv)
@@ -4955,4 +5127,6 @@ def main():
             pass
         sys.exit(1)
 
-if __name__=="__main__": main()
+
+if __name__ == "__main__":
+    main()

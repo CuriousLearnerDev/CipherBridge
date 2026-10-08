@@ -40,10 +40,14 @@ ICON_ALIASES: dict[str, str] = {
     "import": "open",
     # 解析器旧名
     "upload": "parser",
+    # 探测 / AI
+    "probe": "search",
+    "detect": "search",
+    "bot": "ai",
 }
 
-# 彩色 PNG 优先（自定义解析器/构建器/浏览器图标，不走 SVG 主题染色）
-_COLOR_PNG_FIRST = frozenset({"parser", "builder", "browser"})
+# 彩色 PNG 优先（自定义解析器/构建器/浏览器图标；AI 改用可主题着色的 SVG）
+_COLOR_PNG_FIRST = frozenset({"parser", "builder", "browser", "claude", "gemini"})
 
 _VARIANT_TINT = {
     "primary": C["text"],
@@ -96,6 +100,21 @@ def _render_svg(svg_path: str, size: int, tint: str | None = None) -> QIcon:
     return QIcon(pixmap)
 
 
+def _load_png(png_path: str, size: int, tint: str | None = None, *, keep_color: bool = False) -> QIcon:
+    """加载 PNG；keep_color 时只缩放不染色（彩色自定义图标）。"""
+    src = QPixmap(png_path)
+    if src.isNull():
+        return QIcon()
+    src = src.scaled(
+        QSize(size, size),
+        Qt.AspectRatioMode.KeepAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
+    )
+    if keep_color or tint is None:
+        return QIcon(src)
+    return _tint_png_pixmap(src, tint)
+
+
 def _tint_png(png_path: str, size: int, tint: str) -> QIcon:
     """PNG 重着色：透明底深色图标 → 主题色；彩色图标保持原色."""
     src = QPixmap(png_path)
@@ -106,6 +125,10 @@ def _tint_png(png_path: str, size: int, tint: str) -> QIcon:
         Qt.AspectRatioMode.KeepAspectRatio,
         Qt.TransformationMode.SmoothTransformation,
     )
+    return _tint_png_pixmap(src, tint)
+
+
+def _tint_png_pixmap(src: QPixmap, tint: str) -> QIcon:
     img = src.toImage().convertToFormat(QImage.Format.Format_ARGB32)
     dark_ink = 0
     opaque = 0
@@ -171,9 +194,9 @@ def icon(name: str, size: int = 20, light: bool = False, tint: str | None = None
     for base in _candidate_basenames(name):
         png = os.path.join(ICON_DIR, f"{base}.png")
         svg = os.path.join(ICON_DIR, f"{base}.svg")
-        # 彩色自定义图标：PNG 优先，避免被 SVG 主题色覆盖
+        # 彩色自定义图标：PNG 优先，保持原色（避免黑底 AI 图被主题染色冲掉）
         if base in _COLOR_PNG_FIRST and os.path.isfile(png):
-            ic = _tint_png(png, size, color)
+            ic = _load_png(png, size, keep_color=True)
             break
         if os.path.isfile(svg) and _HAS_SVG:
             ic = _render_svg(svg, size, tint=color)

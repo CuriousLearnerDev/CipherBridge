@@ -26,7 +26,7 @@ from core.app_reverse import (
     tools_status,
 )
 from core.icon_loader import set_btn_icon
-from core.theme import style_button, style_muted_label, style_sidebar_aux_button, setup_sub_tabs
+from core.theme import style_button, style_muted_label, setup_sub_tabs
 
 
 class _DecodeWorker(QThread):
@@ -55,6 +55,7 @@ class AppReversePanel(QWidget):
 
     scripts_ready = pyqtSignal(dict, dict)
     request_ai_analyze = pyqtSignal()
+    script_preview = pyqtSignal(str, str)  # label, content → 右侧详情
     capture_log = pyqtSignal(str)
 
     def __init__(self, parent=None, *, compact: bool = True):
@@ -71,10 +72,6 @@ class AppReversePanel(QWidget):
         m = 0 if self._compact else 8
         layout.setContentsMargins(m, m, m, m)
         layout.setSpacing(8)
-
-        title = QLabel("App 逆向（可选）")
-        title.setObjectName("homeSectionTitle")
-        layout.addWidget(title)
 
         row = QHBoxLayout()
         row.setSpacing(6)
@@ -111,17 +108,36 @@ class AppReversePanel(QWidget):
         layout.addLayout(row2)
 
         self.apk_label = QLabel("未选择 APK")
+        self.apk_label.setObjectName("appApkLabel")
         self.apk_label.setWordWrap(True)
         style_muted_label(self.apk_label)
         layout.addWidget(self.apk_label)
 
-        self.tools_label = QLabel()
-        self.tools_label.setWordWrap(True)
-        style_muted_label(self.tools_label)
-        layout.addWidget(self.tools_label)
+        # 工具状态：绿点=已检测到
+        self.tools_row = QHBoxLayout()
+        self.tools_row.setSpacing(12)
+        self.tools_row.setContentsMargins(0, 2, 0, 2)
+        self._tool_dots: dict[str, QLabel] = {}
+        for key, title in (
+            ("java", "Java"),
+            ("apktool", "apktool"),
+            ("jadx_gui", "jadx"),
+        ):
+            chip = QLabel()
+            chip.setObjectName("appToolChip")
+            chip.setTextFormat(Qt.TextFormat.RichText)
+            self._tool_dots[key] = chip
+            self.tools_row.addWidget(chip)
+        self.tools_ready = QLabel()
+        self.tools_ready.setObjectName("appToolsReady")
+        style_muted_label(self.tools_ready)
+        self.tools_row.addWidget(self.tools_ready, 1)
+        layout.addLayout(self.tools_row)
 
-        self.status = QLabel("选择 APK 后反编译，命中代码会送给右侧 Agent。")
+        # 运行时状态（有内容才显示）
+        self.status = QLabel("")
         self.status.setWordWrap(True)
+        self.status.hide()
         style_muted_label(self.status)
         layout.addWidget(self.status)
 
@@ -130,10 +146,6 @@ class AppReversePanel(QWidget):
         self.hit_list = QListWidget()
         self.hit_list.itemClicked.connect(self._preview_hit)
         tabs.addTab(self.hit_list, "加解密候选")
-        self.preview = QPlainTextEdit()
-        self.preview.setReadOnly(True)
-        self.preview.setPlaceholderText("点候选文件预览")
-        tabs.addTab(self.preview, "预览")
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumBlockCount(1500)
@@ -142,28 +154,56 @@ class AppReversePanel(QWidget):
         tabs.setMinimumHeight(220)
         layout.addWidget(tabs, 1)
 
-        tip = QLabel("完成后到右侧 Agent：「AI识别加解密」会参考 app:// 源码")
-        style_muted_label(tip)
-        tip.setWordWrap(True)
-        layout.addWidget(tip)
+    def _tool_chip_html(self, name: str, ok: bool) -> str:
+        from core.theme import C
+
+        if ok:
+            color = C.get("ok", "#3fb950")
+            dot = "●"
+            tip = "已检测到"
+        else:
+            color = C.get("text_dim", "#8b949e")
+            dot = "○"
+            tip = "未找到"
+        return (
+            f'<span style="color:{color}; font-size:13px;" title="{tip}">{dot}</span>'
+            f'&nbsp;<span style="color:{C.get("text", "#e6edf3")}; font-size:12px;">{name}</span>'
+        )
 
     def _refresh_tools_hint(self):
         ensure_tools_dirs()
         st = tools_status()
-        parts = [
-            "Java✓" if st["java"] else "Java✗",
-            "apktool✓" if st["apktool"] else "apktool✗",
-            "jadx✓" if st["jadx_gui"] else "jadx✗",
-        ]
+        labels = {
+            "java": "Java",
+            "apktool": "apktool",
+            "jadx_gui": "jadx",
+        }
+        for key, title in labels.items():
+            chip = self._tool_dots.get(key)
+            if chip is None:
+                continue
+            ok = bool(st.get(key))
+            chip.setText(self._tool_chip_html(title, ok))
+            chip.setToolTip("已检测到" if ok else "未找到，可点「配置工具」")
         miss = missing_required_tools()
+        from core.theme import C
+
         if miss:
-            self.tools_label.setText(
-                "工具: " + " · ".join(parts)
-                + f" — 缺少 {', '.join(miss)}，请点「配置工具」"
+            self.tools_ready.setText(f"缺少 {', '.join(miss)} — 点「配置工具」")
+            self.tools_ready.setStyleSheet(
+                f"color: {C.get('warn', '#d29922')}; background: transparent; font-size: 11px;"
             )
         else:
-            self.tools_label.setText("工具: " + " · ".join(parts) + " — 已就绪")
+            self.tools_ready.setText("已就绪")
+            self.tools_ready.setStyleSheet(
+                f"color: {C.get('ok', '#3fb950')}; background: transparent; font-size: 11px; font-weight: 600;"
+            )
         self.jadx_btn.setEnabled(bool(st["jadx_gui"]))
+
+    def _set_status(self, text: str) -> None:
+        text = (text or "").strip()
+        self.status.setText(text)
+        self.status.setVisible(bool(text))
 
     def _show_tools_setup(self):
         ensure_tools_dirs()
@@ -226,9 +266,9 @@ class AppReversePanel(QWidget):
         self.decode_btn.setEnabled(False)
         self.pick_btn.setEnabled(False)
         self.hit_list.clear()
-        self.preview.clear()
         self.log_view.clear()
         self.status.setText("正在反编译并扫描加解密…")
+        self.status.setVisible(True)
         self._worker = _DecodeWorker(self._apk_path, self)
         self._worker.log.connect(self._log)
         self._worker.finished_ok.connect(self._on_done)
@@ -242,7 +282,7 @@ class AppReversePanel(QWidget):
         self.open_out_btn.setEnabled(True)
         label = result.app_label or os.path.basename(result.apk_path)
         pkg = f" ({result.package_name})" if result.package_name else ""
-        self.status.setText(f"完成 {label}{pkg} · 候选 {len(result.crypto_hits)} · {result.out_dir}")
+        self._set_status(f"完成 {label}{pkg} · 候选 {len(result.crypto_hits)} · {result.out_dir}")
         self.hit_list.clear()
         for h in result.crypto_hits:
             item = QListWidgetItem(f"[{h.score}] {h.relpath}")
@@ -264,7 +304,7 @@ class AppReversePanel(QWidget):
     def _on_fail(self, err: str):
         self.decode_btn.setEnabled(bool(self._apk_path))
         self.pick_btn.setEnabled(True)
-        self.status.setText("反编译失败")
+        self._set_status("反编译失败")
         self._log(f"错误: {err}")
         low = (err or "").lower()
         if "java" in low or "apktool" in low or "未找到" in err:
@@ -285,12 +325,13 @@ class AppReversePanel(QWidget):
         path = item.data(Qt.ItemDataRole.UserRole)
         if not path or not os.path.isfile(path):
             return
+        label = (item.text() or "").strip() or path
         try:
             with open(path, "r", encoding="utf-8", errors="ignore") as f:
                 text = f.read(80_000)
-            self.preview.setPlainText(text)
         except OSError as e:
-            self.preview.setPlainText(str(e))
+            text = str(e)
+        self.script_preview.emit(label, text)
 
     def _open_out(self):
         path = self._last_result.out_dir if self._last_result else default_apk_workspace()

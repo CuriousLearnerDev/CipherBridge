@@ -84,6 +84,7 @@ class MiniprogramCaptureWorker(QObject):
         use_system_proxy: bool = True,
         host_filter: str = "",
         block_noise: bool = True,
+        source_tag: str = "",
     ) -> None:
         if self.running:
             self.failed.emit("抓包代理已在运行")
@@ -92,6 +93,7 @@ class MiniprogramCaptureWorker(QObject):
         self._use_system_proxy = bool(use_system_proxy)
         self._host_filter = (host_filter or "").strip()
         self._block_noise = bool(block_noise)
+        self._source_tag = str(source_tag or "").strip()
         self._key_to_index.clear()
         self._flow_count = 0
         self._buf = ""
@@ -111,8 +113,14 @@ class MiniprogramCaptureWorker(QObject):
         self._proc = QProcess(self)
         env = QProcessEnvironment.systemEnvironment()
         env.insert("PYTHONPATH", get_app_root())
+        # Windows 控制台默认 GBK，中文/… 经 stdout 会乱码，导致「等待响应」对不上、响应合并不上
+        env.insert("PYTHONIOENCODING", "utf-8")
+        env.insert("PYTHONUTF8", "1")
         env.insert("CB_CAPTURE_HOST_FILTER", self._host_filter)
         env.insert("CB_CAPTURE_BLOCK_NOISE", "1" if self._block_noise else "0")
+        source = getattr(self, "_source_tag", "") or ""
+        if source:
+            env.insert("CB_CAPTURE_SOURCE", source)
         self._proc.setProcessEnvironment(env)
         self._proc.setProgram(mitmdump)
         self._proc.setArguments(args)

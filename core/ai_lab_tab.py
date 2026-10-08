@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit, QSpinBox, QCheckBox, QSplitter,
     QListWidget, QListWidgetItem, QMessageBox, QFormLayout, QTabWidget,
     QDialog, QDialogButtonBox, QToolButton, QMenu, QSizePolicy, QComboBox,
+    QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
 )
 
 from core.ai_config import load_ai_config, save_ai_config
@@ -32,6 +33,9 @@ from core.agent_runner import (
     RECOGNIZE_GOAL,
     ANTI_DEBUG_GOAL,
     HASH_HOOK_GOAL,
+    FINGERPRINT_HOOK_GOAL,
+    JS_REVERSE_GOAL,
+    JS_DEOBFUSCATE_GOAL,
 )
 from core.agent_tools import SessionData
 from core.ai_project_writer import (
@@ -44,9 +48,10 @@ from core.app_tab import AppReversePanel
 from core.project_name import normalize_project_name
 from core.icon_loader import set_btn_icon
 from core.theme import (
-    C, style_button, style_muted_label, setup_code_editor, style_sidebar_aux_button,
-    setup_sub_tabs,
+    C, style_button, style_muted_label, setup_code_editor, setup_mono_field,
+    style_sidebar_aux_button, setup_sub_tabs,
 )
+from core.syntax_highlighter import attach_llm_io_highlighter
 from core.field_target_dialog import (
     ask_field_targets,
     format_field_targets_hint,
@@ -78,7 +83,9 @@ class AILabTab(QWidget):
         self._worker: BrowserLabWorker | None = None
         self._analysis_worker: AIAnalysisWorker | None = None
         self._agent_worker: AgentWorker | None = None
+        self._web_capture = None  # MiniprogramCaptureWorker | None，网页独立抓包
         self._last_result: dict | None = None
+        self._last_verify_report = None
         self._last_plugin_code: str = ""
         self._auto_generate_after_analysis = False
         self._pending_generate_role: str | None = None
@@ -94,14 +101,20 @@ class AILabTab(QWidget):
         self._ui_flush_timer.timeout.connect(self._flush_ui_buffers)
         self._busy = False
         self._btn_labels = {
-            "decrypt": "生成解密",
-            "encrypt": "生成加密",
-            "recognize": "识别加解密",
+            "analyze": "分析加解密",
+            "decrypt": "分析加解密",
+            "encrypt": "分析加解密",
+            "recognize": "识别",
             "anti_debug": "分析debugger",
+            "fingerprint_hook": "指纹绕过HOOK",
+            "js_reverse": "JS逆向",
+            "js_deobfuscate": "JS解密",
         }
         self._agent_mode = "chat"
         # AI 加解密目标字段：decrypt / encrypt / resp_decrypt / unrestricted
         self._field_targets: dict | None = None
+        # Agent「上下文」表格行：[{title, request, response}, ...]
+        self._ai_ctx_entries: list[dict] = []
         self._build_ui()
         self._load_config()
         self._refresh_api_status()
@@ -113,7 +126,7 @@ class AILabTab(QWidget):
 
         self.setObjectName("aiLabPage")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 14, 16, 16)
+        layout.setContentsMargins(0, 2, 0, 2)
         layout.setSpacing(0)
 
         # 兼容旧代码引用（不加入布局，零占位）
@@ -134,8 +147,8 @@ class AILabTab(QWidget):
         left = QFrame()
         left.setObjectName("aiPane")
         ll = QVBoxLayout(left)
-        ll.setContentsMargins(12, 10, 12, 12)
-        ll.setSpacing(10)
+        ll.setContentsMargins(2, 4, 2, 4)
+        ll.setSpacing(6)
         self.source_tabs = QTabWidget()
         setup_sub_tabs(self.source_tabs)
         self.source_tabs.addTab(self._build_browser_source(), "网页")
@@ -145,11 +158,13 @@ class AILabTab(QWidget):
         self.miniprogram_panel.flow_captured.connect(self._on_miniprogram_flow)
         self.miniprogram_panel.flow_updated.connect(self._on_miniprogram_flow_updated)
         self.miniprogram_panel.flow_selected.connect(self._show_external_flow)
+        self.miniprogram_panel.script_preview.connect(self._on_script_preview)
         self.miniprogram_panel.capture_log.connect(self._log)
         self.source_tabs.addTab(self.miniprogram_panel, "小程序")
         self.app_panel = AppReversePanel(compact=True)
         self.app_panel.scripts_ready.connect(self.load_app_scripts)
         self.app_panel.request_ai_analyze.connect(self._run_recognize)
+        self.app_panel.script_preview.connect(self._on_script_preview)
         self.app_panel.capture_log.connect(self._log)
         self.source_tabs.addTab(self.app_panel, "App")
         ll.addWidget(self.source_tabs, 1)
@@ -159,49 +174,26 @@ class AILabTab(QWidget):
         right = QFrame()
         right.setObjectName("aiPane")
         rl = QVBoxLayout(right)
-        rl.setContentsMargins(12, 10, 12, 12)
-        rl.setSpacing(10)
-
-        toolbar = QFrame()
-        toolbar.setObjectName("aiToolbar")
-        sec_row = QHBoxLayout(toolbar)
-        sec_row.setContentsMargins(2, 0, 2, 0)
-        sec_row.setSpacing(8)
-
-        self.next_hint = QLabel()
-        self.next_hint.setObjectName("aiNextHint")
-        self.next_hint.setWordWrap(False)
-        style_muted_label(self.next_hint)
-        sec_row.addWidget(self.next_hint, 1)
+        rl.setContentsMargins(2, 4, 2, 4)
+        rl.setSpacing(6)
 
         self.api_status = QLabel()
         self.api_status.setObjectName("aiReadyChip")
         self.api_status.setCursor(Qt.CursorShape.PointingHandCursor)
         self.api_status.installEventFilter(self)
-        sec_row.addWidget(self.api_status)
-
-        clear_btn = QPushButton("清空")
-        clear_btn.setToolTip("清空流量 / Hook / JS（保留分析结果）")
-        clear_btn.clicked.connect(self._clear_capture)
-        style_button(clear_btn, "ghost", size="sm")
-        set_btn_icon(clear_btn, "clear", size=12)
-        sec_row.addWidget(clear_btn)
 
         more_btn = QToolButton()
         more_btn.setText("更多")
-        more_btn.setToolTip("配置 / 加载 / Hook 分析")
+        more_btn.setToolTip("配置与加载（分析类在 Agent「工具」里）")
         more_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         more_menu = QMenu(self)
         more_menu.addAction("AI 配置…", self._on_open_ai_config)
         more_menu.addAction("高级…", self._on_open_adv_config)
         more_menu.addSeparator()
-        self._act_hook_analyze = more_menu.addAction("分析 Hook + JS", self._run_hook_analysis)
-        more_menu.addSeparator()
         more_menu.addAction("加载到构建器", self._load_to_builder)
         more_menu.addAction("加载到解析器", self._load_fields_to_parser)
         more_btn.setMenu(more_menu)
         style_sidebar_aux_button(more_btn, icon_only=False)
-        sec_row.addWidget(more_btn)
 
         # 兼容旧引用（收入「更多」菜单，不占顶栏）
         self.ai_cfg_btn = QPushButton("配置")
@@ -210,10 +202,19 @@ class AILabTab(QWidget):
         self.adv_cfg_btn = QPushButton("高级")
         self.adv_cfg_btn.hide()
         self.adv_cfg_btn.clicked.connect(self._on_open_adv_config)
-        rl.addWidget(toolbar)
 
         self.result_tabs = QTabWidget()
         setup_sub_tabs(self.result_tabs)
+        # 模型 / 更多 与 Tab 同一行；采集提示在左侧目标 URL 下方
+        corner = QWidget()
+        corner.setObjectName("aiTabCorner")
+        corner_row = QHBoxLayout(corner)
+        corner_row.setContentsMargins(6, 0, 0, 0)
+        corner_row.setSpacing(6)
+        corner_row.addWidget(self.api_status, 0)
+        corner_row.addWidget(more_btn, 0)
+        self.result_tabs.setCornerWidget(corner, Qt.Corner.TopRightCorner)
+
         self.result_view = QPlainTextEdit()
         setup_code_editor(self.result_view)
         self.result_view.setReadOnly(True)
@@ -236,7 +237,7 @@ class AILabTab(QWidget):
         setup_code_editor(self.flow_req_view)
         self.flow_req_view.setReadOnly(True)
         self.flow_req_view.setPlaceholderText(
-            "单击左侧流量查看请求（Burp 格式）\n双击加载到请求解析器"
+            "单击左侧流量查看请求（Burp 格式）\n右键「转解析器」加载到请求解析器"
         )
         self.flow_resp_view = QPlainTextEdit()
         setup_code_editor(self.flow_resp_view)
@@ -294,101 +295,644 @@ class AILabTab(QWidget):
         name = self.result_tabs.tabText(index)
         wrap.setVisible(name == "结果")
 
+    @staticmethod
+    def _ai_ctx_banner(text: str) -> str:
+        for line in (text or "").splitlines():
+            s = line.strip()
+            if s.startswith("========") and s.endswith("========"):
+                return s.strip("= ").strip()
+        return ""
+
+    @classmethod
+    def _ai_ctx_kind_label(cls, text: str, kind: str) -> str:
+        """表格「类型」列：任务 / 轮次 N / 最终输出 …"""
+        import re
+
+        banner = cls._ai_ctx_banner(text)
+        if not banner:
+            return "发送" if kind == "request" else "响应"
+        m = re.search(r"(?:发送|响应)\s*#\s*(\d+)", banner)
+        if m:
+            return f"轮次 {m.group(1)}"
+        if "任务" in banner:
+            return "任务"
+        if "最终" in banner:
+            return "最终输出"
+        if "旧版" in banner:
+            return "旧版分析"
+        return banner
+
+    @staticmethod
+    def _ai_ctx_size_label(text: str) -> str:
+        n = len(text or "")
+        if n <= 0:
+            return "—"
+        if n < 1000:
+            return f"{n}"
+        if n < 10_000:
+            return f"{n / 1000:.1f}k"
+        return f"{n // 1000}k"
+
+    @staticmethod
+    def _ai_ctx_strip_noise_lines(text: str) -> list[str]:
+        out: list[str] = []
+        for line in (text or "").splitlines():
+            s = line.strip()
+            if not s:
+                continue
+            if s.startswith("========") and s.endswith("========"):
+                continue
+            if s.startswith("——") and s.endswith("——"):
+                continue
+            if s.startswith("tools:"):
+                continue
+            out.append(s)
+        return out
+
+    @classmethod
+    def _ai_ctx_request_summary(cls, text: str) -> str:
+        """从发送文本提炼一行摘要。"""
+        import re
+
+        if not (text or "").strip():
+            return "—"
+        banner = cls._ai_ctx_banner(text)
+        # 任务 / 最终类：直接取正文首行
+        if banner and ("任务" in banner or "最终" in banner or "旧版" in banner):
+            body_lines = []
+            skip = True
+            for line in text.splitlines():
+                s = line.strip()
+                if skip:
+                    if s.startswith("========"):
+                        skip = False
+                    continue
+                if s.startswith("mode:"):
+                    continue
+                if s:
+                    body_lines.append(s)
+                    if len(body_lines) >= 2:
+                        break
+            one = " ".join(body_lines)
+            return (one[:90] + "…") if len(one) > 90 else (one or banner)
+
+        tools_n = None
+        m = re.search(r"tools:\s*(\d+)", text)
+        if m:
+            tools_n = int(m.group(1))
+        roles = re.findall(r"messages\[\d+\]\s+role=(\w+)", text)
+        parts: list[str] = []
+        if tools_n is not None:
+            parts.append(f"{tools_n} tools")
+        if roles:
+            # 压缩 role 序列：user,assistant,user → 3 msg (u/a/u)
+            short = "/".join(r[0] for r in roles[:8])
+            if len(roles) > 8:
+                short += "…"
+            parts.append(f"{len(roles)} msg ({short})")
+        # 最后一条非 system 内容预览
+        chunks = re.split(r"—— messages\[\d+\] role=(\w+) ——\n?", text)
+        # chunks: [pre, role1, body1, role2, body2, ...]
+        last_preview = ""
+        if len(chunks) >= 3:
+            for i in range(len(chunks) - 2, 0, -2):
+                role = chunks[i]
+                body = chunks[i + 1] if i + 1 < len(chunks) else ""
+                if role == "system":
+                    continue
+                flat = " ".join(body.split())
+                if flat:
+                    last_preview = f"{role}: {flat[:48]}{'…' if len(flat) > 48 else ''}"
+                    break
+        if last_preview:
+            parts.append(last_preview)
+        return " · ".join(parts) if parts else "—"
+
+    @classmethod
+    def _ai_ctx_response_summary(cls, text: str) -> str:
+        """从响应文本提炼一行摘要（工具名 / stop / token / 正文）。"""
+        import re
+
+        if not (text or "").strip():
+            return "等待中…"
+        parts: list[str] = []
+        # tool_use name
+        names = re.findall(r'"name"\s*:\s*"([^"]+)"', text)
+        # 也匹配 type": "tool_use" 附近；上面已够用。去重保序
+        seen: set[str] = set()
+        tool_names: list[str] = []
+        for n in names:
+            if n in seen or n in ("tool_use", "text", "tool_result"):
+                continue
+            # 过滤 usage 等非工具字段误伤：常见工具带点号
+            if "." not in n and n not in (
+                "script", "flow", "hook", "session", "browser", "page", "crypto"
+            ):
+                # 仍可能是工具短名；保留较短的
+                if len(n) > 40:
+                    continue
+            seen.add(n)
+            tool_names.append(n)
+            if len(tool_names) >= 4:
+                break
+        if tool_names:
+            shown = ", ".join(tool_names[:3])
+            if len(tool_names) > 3:
+                shown += "…"
+            parts.append(f"tools: {shown}")
+        m = re.search(r"stop_reason:\s*(\S+)", text)
+        if m:
+            parts.append(m.group(1))
+        # usage tokens
+        um = re.search(
+            r'"?(?:input_tokens|prompt_tokens)"?\s*[:=]\s*(\d+).*?'
+            r'"?(?:output_tokens|completion_tokens)"?\s*[:=]\s*(\d+)',
+            text,
+            re.DOTALL,
+        )
+        if um:
+            parts.append(f"in {um.group(1)} / out {um.group(2)}")
+        else:
+            um2 = re.search(r"usage:\s*(\{.*\})", text)
+            if um2:
+                parts.append("usage✓")
+        if not parts:
+            lines = cls._ai_ctx_strip_noise_lines(text)
+            flat = " ".join(lines)[:80]
+            if flat:
+                parts.append(flat + ("…" if len(" ".join(lines)) > 80 else ""))
+        return " · ".join(parts) if parts else "—"
+
+    @classmethod
+    def _ai_ctx_row_summary(cls, entry: dict) -> str:
+        req = entry.get("request") or ""
+        resp = entry.get("response") or ""
+        kind = entry.get("kind") or ""
+        if kind == "task" or ("任务" in (entry.get("title") or "")):
+            return cls._ai_ctx_request_summary(req)
+        if kind == "final" or ("最终" in (entry.get("title") or "")):
+            return cls._ai_ctx_response_summary(resp) if resp.strip() else cls._ai_ctx_request_summary(req)
+        # 常规轮次：优先响应摘要（更能看出 Agent 在干嘛），否则请求摘要
+        if resp.strip():
+            return cls._ai_ctx_response_summary(resp)
+        return cls._ai_ctx_request_summary(req)
+
+    def _build_ai_context_page(self) -> QWidget:
+        """Agent 显示区内「上下文」子页：精简表格，双击查看请求/响应。"""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 2, 0, 0)
+        layout.setSpacing(4)
+
+        table = QTableWidget(0, 5)
+        table.setHorizontalHeaderLabels(["#", "类型", "摘要", "请求", "响应"])
+        table.verticalHeader().setVisible(False)
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setAlternatingRowColors(True)
+        table.setShowGrid(False)
+        table.setWordWrap(False)
+        table.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        hh = table.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        hh.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setStretchLastSection(False)
+        table.setToolTip("双击查看该轮请求与响应全文")
+        # 只用 cellDoubleClicked：再接 itemActivated 会叠两个弹窗，关要点两次 X
+        table.cellDoubleClicked.connect(self._on_ai_context_row_activated)
+        self.ai_ctx_table = table
+        layout.addWidget(table, 1)
+        return page
+
+    def _clear_ai_context_views(self) -> None:
+        self._ai_ctx_entries = []
+        table = getattr(self, "ai_ctx_table", None)
+        if table is not None:
+            table.setRowCount(0)
+
+    def _refresh_ai_context_table_row(self, row: int) -> None:
+        table = getattr(self, "ai_ctx_table", None)
+        if table is None or row < 0 or row >= len(self._ai_ctx_entries):
+            return
+        entry = self._ai_ctx_entries[row]
+        if table.rowCount() <= row:
+            table.setRowCount(row + 1)
+        req = entry.get("request") or ""
+        resp = entry.get("response") or ""
+        vals = [
+            str(row + 1),
+            str(entry.get("title") or f"#{row + 1}"),
+            self._ai_ctx_row_summary(entry),
+            self._ai_ctx_size_label(req),
+            self._ai_ctx_size_label(resp) if resp.strip() else "…",
+        ]
+        tip_full = (
+            f"{entry.get('title') or ''} · "
+            f"请求 {self._ai_ctx_size_label(req)} · "
+            f"响应 {self._ai_ctx_size_label(resp) if resp.strip() else '等待中'}\n"
+            f"{self._ai_ctx_row_summary(entry)}"
+        )
+        align_center = int(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+        for col, text in enumerate(vals):
+            item = table.item(row, col)
+            if item is None:
+                item = QTableWidgetItem()
+                table.setItem(row, col, item)
+            item.setText(text)
+            item.setToolTip(tip_full)
+            if col in (0, 1, 3, 4):
+                item.setTextAlignment(align_center)
+
+    def _append_ai_context(self, kind: str, text: str) -> None:
+        """kind: request | response — 写入表格；同轮 request→response 合并一行。"""
+        body = (text or "").rstrip()
+        if not body:
+            return
+        entries = self._ai_ctx_entries
+        title = self._ai_ctx_kind_label(body, kind)
+        entry_kind = "round"
+        if "任务" in title:
+            entry_kind = "task"
+        elif "最终" in title:
+            entry_kind = "final"
+        elif "旧版" in title:
+            entry_kind = "legacy"
+
+        if kind == "request":
+            entries.append({
+                "title": title,
+                "kind": entry_kind,
+                "request": body + "\n",
+                "response": "",
+            })
+            self._refresh_ai_context_table_row(len(entries) - 1)
+            return
+        if kind == "response":
+            # 最终输出 / 任务类单独成行；普通响应填入上一轮未完成的发送
+            standalone = entry_kind in ("final", "task", "legacy")
+            last = entries[-1] if entries else None
+            can_pair = (
+                not standalone
+                and last is not None
+                and not (last.get("response") or "").strip()
+                and (last.get("request") or "").strip()
+            )
+            if can_pair:
+                last["response"] = body + "\n"
+                self._refresh_ai_context_table_row(len(entries) - 1)
+            else:
+                entries.append({
+                    "title": title,
+                    "kind": entry_kind,
+                    "request": "",
+                    "response": body + "\n",
+                })
+                self._refresh_ai_context_table_row(len(entries) - 1)
+
+    def _on_ai_context_row_activated(self, row: int, _col: int = 0) -> None:
+        if row < 0 or row >= len(self._ai_ctx_entries):
+            return
+        self._show_ai_context_detail(row)
+
+    @staticmethod
+    def _ai_ctx_json_end(s: str, start: int) -> int | None:
+        """从 start 处的 {/[ 找到匹配结束位置（考虑字符串转义）；失败返回 None。"""
+        if start >= len(s) or s[start] not in "{[":
+            return None
+        stack: list[str] = []
+        in_str = False
+        esc = False
+        for i in range(start, len(s)):
+            c = s[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif c == "\\":
+                    esc = True
+                elif c == '"':
+                    in_str = False
+                continue
+            if c == '"':
+                in_str = True
+            elif c in "{[":
+                stack.append(c)
+            elif c in "}]":
+                if not stack:
+                    return None
+                op = stack.pop()
+                if (op == "{" and c != "}") or (op == "[" and c != "]"):
+                    return None
+                if not stack:
+                    return i + 1
+        return None
+
+    @classmethod
+    def _ai_ctx_pretty_text(cls, text: str, *, max_chars: int = 400_000) -> str:
+        """展示用：嵌入的 JSON 对象/数组缩进美化；失败则原样。"""
+        if not text or not text.strip():
+            return text
+        if len(text) > max_chars:
+            return text
+        out: list[str] = []
+        i = 0
+        n = len(text)
+        while i < n:
+            ch = text[i]
+            if ch in "{[":
+                end = cls._ai_ctx_json_end(text, i)
+                if end is not None and end - i >= 2:
+                    chunk = text[i:end]
+                    try:
+                        obj = json.loads(chunk)
+                        out.append(json.dumps(obj, ensure_ascii=False, indent=2))
+                        i = end
+                        continue
+                    except Exception:
+                        pass
+            out.append(ch)
+            i += 1
+        return "".join(out)
+
+    def _show_ai_context_detail(self, row: int) -> None:
+        from PyQt6.QtWidgets import QApplication
+
+        # 防止重复打开叠层（关一次还剩一个）
+        if getattr(self, "_ai_ctx_detail_open", False):
+            return
+        entry = self._ai_ctx_entries[row]
+        title = entry.get("title") or f"#{row + 1}"
+        req_raw = entry.get("request") or ""
+        resp_raw = entry.get("response") or ""
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"上下文 · {title}")
+        dlg.resize(980, 620)
+        root = QVBoxLayout(dlg)
+        root.setContentsMargins(6, 6, 6, 6)
+        root.setSpacing(8)
+
+        split = QSplitter(Qt.Orientation.Horizontal)
+
+        def _pane(label: str, raw: str) -> QPlainTextEdit:
+            raw_text = raw if raw.strip() else f"（无{label}内容）"
+            # 展示美化；复制仍用原文
+            display = (
+                raw_text
+                if raw_text.startswith("（无")
+                else self._ai_ctx_pretty_text(raw_text)
+            )
+            view = QPlainTextEdit()
+            setup_mono_field(view)
+            attach_llm_io_highlighter(view)
+            view.setReadOnly(True)
+            view.setPlainText(display)
+            view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+            view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            view.setToolTip(f"{label}（已格式化显示；右键可复制原文）")
+
+            def _copy_all(_checked: bool = False, t: str = raw_text) -> None:
+                QApplication.clipboard().setText(t)
+
+            def _show_menu(pos) -> None:
+                from PyQt6.QtGui import QAction
+
+                m = view.createStandardContextMenu()
+                actions = m.actions()
+                act = QAction(f"复制全部{label}（原文）", m)
+                act.triggered.connect(_copy_all)
+                m.insertAction(actions[0] if actions else None, act)
+                m.exec(view.mapToGlobal(pos))
+
+            view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            view.customContextMenuRequested.connect(_show_menu)
+            return view
+
+        split.addWidget(_pane("请求", req_raw))
+        split.addWidget(_pane("响应", resp_raw))
+        split.setStretchFactor(0, 1)
+        split.setStretchFactor(1, 1)
+        root.addWidget(split, 1)
+        self._ai_ctx_detail_open = True
+        try:
+            dlg.exec()
+        finally:
+            self._ai_ctx_detail_open = False
+
+    def _ask_scroll_confirm(
+        self,
+        title: str,
+        text: str,
+        *,
+        default_yes: bool = True,
+        yes_text: str = "是",
+        no_text: str = "否",
+    ) -> bool:
+        """长文确认框：正文可滚动，避免 QMessageBox 撑爆/截断。"""
+        dlg = QDialog(self)
+        dlg.setWindowTitle(title)
+        dlg.resize(560, 420)
+        root = QVBoxLayout(dlg)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(10)
+
+        view = QPlainTextEdit()
+        setup_code_editor(view)
+        view.setReadOnly(True)
+        view.setPlainText(text or "")
+        view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        root.addWidget(view, 1)
+
+        btns = QDialogButtonBox()
+        yes_btn = btns.addButton(yes_text, QDialogButtonBox.ButtonRole.YesRole)
+        no_btn = btns.addButton(no_text, QDialogButtonBox.ButtonRole.NoRole)
+        style_button(yes_btn, "primary", size="sm")
+        style_button(no_btn, "ghost", size="sm")
+        yes_btn.clicked.connect(dlg.accept)
+        no_btn.clicked.connect(dlg.reject)
+        if default_yes:
+            yes_btn.setDefault(True)
+            yes_btn.setFocus()
+        else:
+            no_btn.setDefault(True)
+            no_btn.setFocus()
+        root.addWidget(btns)
+        return dlg.exec() == QDialog.DialogCode.Accepted
+
+    def _focus_agent_context_tab(self, *, which: str = "request") -> None:
+        """切到 Agent 页内的「上下文」子选项卡。"""
+        pane = getattr(self, "agent_display_tabs", None)
+        if pane is not None:
+            for i in range(pane.count()):
+                if pane.tabText(i) == "上下文":
+                    pane.setCurrentIndex(i)
+                    break
+        table = getattr(self, "ai_ctx_table", None)
+        if table is not None and table.rowCount() > 0:
+            table.selectRow(table.rowCount() - 1)
+            table.scrollToBottom()
+
     def _build_agent_page(self) -> QWidget:
-        """Agent：主操作 + 目标字段 + 对话（少框、单主按钮）."""
+        """Agent：主操作精简（生成/识别）+ 次要进「工具」菜单."""
         from PyQt6.QtWidgets import QFrame
 
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 8, 0, 0)
-        layout.setSpacing(10)
+        layout.setContentsMargins(0, 2, 0, 0)
+        layout.setSpacing(4)
 
         actions = QFrame()
         actions.setObjectName("aiActionBar")
         act = QHBoxLayout(actions)
-        act.setContentsMargins(0, 4, 0, 4)
-        act.setSpacing(8)
+        act.setContentsMargins(0, 0, 0, 0)
+        act.setSpacing(6)
 
-        self.gen_decrypt_btn = QPushButton(self._btn_labels["decrypt"])
-        self.gen_decrypt_btn.setToolTip("分析并写出解密端 plugin.py")
-        self.gen_decrypt_btn.clicked.connect(lambda: self._run_analyze_and_generate("decrypt"))
-        style_button(self.gen_decrypt_btn, "primary")
-        set_btn_icon(self.gen_decrypt_btn, "decrypt", size=14)
+        def _fit(btn: QPushButton) -> None:
+            btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+
+        # 左侧：主分析动作（统一高度，避免主按钮+纯图标混排）
+        self.gen_decrypt_btn = QPushButton(self._btn_labels["analyze"])
+        self.gen_decrypt_btn.setToolTip(
+            "弹出字段选择：点亮「解密」或「加密」后勾选字段，分析并写出 plugin.py"
+        )
+        self.gen_decrypt_btn.clicked.connect(lambda: self._run_analyze_and_generate())
+        style_button(self.gen_decrypt_btn, "primary", size="sm")
+        set_btn_icon(self.gen_decrypt_btn, "ai", size=14)
+        _fit(self.gen_decrypt_btn)
         act.addWidget(self.gen_decrypt_btn)
 
+        # 兼容旧引用：生成加密已并入「分析加解密」
         self.gen_encrypt_btn = QPushButton(self._btn_labels["encrypt"])
-        self.gen_encrypt_btn.setToolTip("分析并写出加密端 plugin.py")
-        self.gen_encrypt_btn.clicked.connect(lambda: self._run_analyze_and_generate("encrypt"))
-        style_button(self.gen_encrypt_btn, "default")
-        set_btn_icon(self.gen_encrypt_btn, "encrypt", size=14)
-        act.addWidget(self.gen_encrypt_btn)
+        self.gen_encrypt_btn.hide()
+        self.gen_encrypt_btn.clicked.connect(
+            lambda: self._run_analyze_and_generate("encrypt")
+        )
 
         self.recognize_btn = QPushButton(self._btn_labels["recognize"])
         self.recognize_btn.setToolTip("识别加解密（不写文件）")
         self.recognize_btn.clicked.connect(self._run_recognize)
-        style_button(self.recognize_btn, "ghost")
-        set_btn_icon(self.recognize_btn, "code", size=14)
+        style_button(self.recognize_btn, "ghost", size="sm")
+        set_btn_icon(self.recognize_btn, "search", size=14)
+        _fit(self.recognize_btn)
         act.addWidget(self.recognize_btn)
 
-        self.anti_debug_agent_btn = QPushButton(self._btn_labels["anti_debug"])
-        self.anti_debug_agent_btn.setToolTip("分析无限 debugger，推荐注入勾选")
-        self.anti_debug_agent_btn.clicked.connect(self._run_anti_debug_analyze)
-        style_button(self.anti_debug_agent_btn, "ghost")
-        set_btn_icon(self.anti_debug_agent_btn, "search", size=14)
-        act.addWidget(self.anti_debug_agent_btn)
         act.addStretch(1)
+
+        # 右侧：清空 + 工具（与顶栏「更多」区分命名）
+        clear_btn = QPushButton("清空")
+        clear_btn.setToolTip("清空采集与 AI 输出（流量 / Hook / Agent / 结果）")
+        clear_btn.clicked.connect(self._clear_capture)
+        style_button(clear_btn, "ghost", size="sm")
+        set_btn_icon(clear_btn, "clear", size=14)
+        _fit(clear_btn)
+        act.addWidget(clear_btn)
+
+        tools_btn = QToolButton()
+        tools_btn.setText("工具")
+        tools_btn.setToolTip("验证 / debugger / 环境绕过 / JS逆向 / JS解密 / Hook分析")
+        tools_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        tools_menu = QMenu(tools_btn)
+        self._act_verify_crypto = tools_menu.addAction(
+            "验证加解密", self._verify_crypto_now
+        )
+        tools_menu.addSeparator()
+        self._act_anti_debug = tools_menu.addAction(
+            "分析 debugger", self._run_anti_debug_analyze
+        )
+        self._act_fingerprint_hook = tools_menu.addAction(
+            "指纹绕过 HOOK", self._run_fingerprint_hook_analyze
+        )
+        self._act_fingerprint_hook.setToolTip(
+            "识别本站指纹采集并生成站点 hook_js（叠在通用拟真之上）"
+        )
+        self._act_bot_bypass_agent = tools_menu.addAction(
+            "AI 绕过（Bot/挑战）", self._run_bot_bypass_analyze
+        )
+        self._act_bot_bypass_agent.setToolTip(
+            "独立窗口：Bot/挑战分析；也可在浏览器「更多 → 环境绕过」打开"
+        )
+        self._act_js_reverse = tools_menu.addAction(
+            "JS 逆向", self._run_js_reverse_analyze
+        )
+        self._act_js_deobfuscate = tools_menu.addAction(
+            "JS 解密", self._run_js_deobfuscate_analyze
+        )
+        tools_menu.addSeparator()
+        self._act_hook_analyze = tools_menu.addAction(
+            "分析 Hook + JS", self._run_hook_analysis
+        )
+        tools_btn.setMenu(tools_menu)
+        style_sidebar_aux_button(tools_btn, icon_only=False)
+        act.addWidget(tools_btn)
+        self._agent_tools_btn = tools_btn
+
+        # 兼容旧引用
+        self.verify_crypto_btn = QPushButton("验证")
+        self.verify_crypto_btn.hide()
+        self.verify_crypto_btn.clicked.connect(self._verify_crypto_now)
+        self.anti_debug_agent_btn = QPushButton(self._btn_labels["anti_debug"])
+        self.anti_debug_agent_btn.hide()
+        self.anti_debug_agent_btn.clicked.connect(self._run_anti_debug_analyze)
+        self.js_reverse_btn = QPushButton(self._btn_labels["js_reverse"])
+        self.js_reverse_btn.hide()
+        self.js_reverse_btn.clicked.connect(self._run_js_reverse_analyze)
+        self.js_deobfuscate_btn = QPushButton(self._btn_labels["js_deobfuscate"])
+        self.js_deobfuscate_btn.hide()
+        self.js_deobfuscate_btn.clicked.connect(self._run_js_deobfuscate_analyze)
+        self.anti_debug_ai_btn = self.anti_debug_agent_btn
+
         layout.addWidget(actions)
 
-        target = QFrame()
-        target.setObjectName("aiTargetPanel")
-        tl = QHBoxLayout(target)
-        tl.setContentsMargins(0, 2, 0, 2)
-        tl.setSpacing(10)
-        title = QLabel("目标字段")
-        title.setObjectName("aiTargetPanelTitle")
-        tl.addWidget(title)
+        # 目标字段行已去掉：点「分析加解密」时会弹出字段选择
         self.field_targets_label = QLabel()
-        self.field_targets_label.setObjectName("aiTargetStatus")
-        self.field_targets_label.setWordWrap(True)
-        tl.addWidget(self.field_targets_label, 1)
+        self.field_targets_label.hide()
         self.field_targets_btn = QPushButton("选择字段")
-        self.field_targets_btn.setToolTip(
-            "选请求 → 请求/响应 → 点字段，缩小 AI 猜测范围"
-        )
-        style_button(self.field_targets_btn, "ghost", size="sm")
-        set_btn_icon(self.field_targets_btn, "search", size=12)
+        self.field_targets_btn.hide()
         self.field_targets_btn.clicked.connect(self._edit_field_targets)
-        tl.addWidget(self.field_targets_btn)
-        layout.addWidget(target)
 
+        # 显示区：过程 | 上下文
+        self.agent_display_tabs = QTabWidget()
+        setup_sub_tabs(self.agent_display_tabs)
         self.agent_view = QPlainTextEdit()
         setup_code_editor(self.agent_view)
         self.agent_view.setReadOnly(True)
         self.agent_view.setPlaceholderText("Agent 过程与结论会显示在这里")
-        layout.addWidget(self.agent_view, 1)
+        self.agent_display_tabs.addTab(self.agent_view, "过程")
+        self.agent_display_tabs.addTab(self._build_ai_context_page(), "上下文")
+        layout.addWidget(self.agent_display_tabs, 1)
 
         composer = QFrame()
         composer.setObjectName("aiComposer")
         row = QHBoxLayout(composer)
-        row.setContentsMargins(0, 10, 0, 0)
-        row.setSpacing(8)
+        row.setContentsMargins(0, 2, 0, 0)
+        row.setSpacing(4)
         self.agent_mode_combo = QComboBox()
         self.agent_mode_combo.addItem("加解密", "chat")
         self.agent_mode_combo.addItem("反调试", "anti_debug")
-        self.agent_mode_combo.setToolTip("对话模式：加解密 / 反调试")
-        self.agent_mode_combo.setFixedWidth(96)
+        self.agent_mode_combo.addItem("绕过检查", "bot_bypass")
+        self.agent_mode_combo.addItem("指纹绕过", "fingerprint_hook")
+        self.agent_mode_combo.addItem("JS逆向", "js_reverse")
+        self.agent_mode_combo.addItem("JS解密", "js_deobfuscate")
+        self.agent_mode_combo.setToolTip(
+            "对话模式：加解密 / 反调试 / 绕过 / 指纹绕过 / JS逆向 / JS解密"
+        )
+        self.agent_mode_combo.setFixedWidth(84)
         row.addWidget(self.agent_mode_combo)
         self.agent_edit = QLineEdit()
         self.agent_edit.setPlaceholderText("输入任务，回车发送…")
-        self.agent_edit.setMinimumHeight(34)
+        self.agent_edit.setMinimumHeight(0)
+        self.agent_edit.setMaximumHeight(22)
         self.agent_edit.returnPressed.connect(self._run_agent)
         self.agent_send_btn = QPushButton("发送")
         self.agent_send_btn.clicked.connect(self._run_agent)
-        style_button(self.agent_send_btn, "primary")
+        style_button(self.agent_send_btn, "primary", size="sm")
         self.agent_stop_btn = QPushButton("停止")
         self.agent_stop_btn.setEnabled(False)
         self.agent_stop_btn.clicked.connect(self._stop_agent)
-        style_button(self.agent_stop_btn, "ghost")
+        style_button(self.agent_stop_btn, "ghost", size="sm")
         row.addWidget(self.agent_edit, 1)
         row.addWidget(self.agent_send_btn)
         row.addWidget(self.agent_stop_btn)
@@ -445,8 +989,210 @@ class AILabTab(QWidget):
                 self.result_tabs.setCurrentIndex(i)
                 break
 
+    def _is_proxy_only(self) -> bool:
+        """真实浏览器模式（旧称只代理）。"""
+        if hasattr(self, "proxy_only_btn") and self.proxy_only_btn.isChecked():
+            return True
+        return bool(getattr(self, "_act_proxy_only", None) and self._act_proxy_only.isChecked())
+
+    def _is_real_browser(self) -> bool:
+        return self._is_proxy_only()
+
+    def _ensure_stealth_mode_for_bypass(self, *, ask: bool = True) -> bool:
+        """环境绕过必须用普通模式（拟真注入）。若开着「真实浏览器」则提示并关闭。
+
+        ask=True：弹窗确认；False：静默切换。返回 False 表示用户取消。
+        """
+        if not self._is_real_browser():
+            return True
+        if ask:
+            ok = QMessageBox.question(
+                self,
+                "需要关闭「真实浏览器」",
+                "「真实浏览器」会关闭拟真注入，指纹/Bot 检测往往过不了。\n\n"
+                "环境绕过需要：普通模式 + 通用拟真 + 站点 Hook。\n"
+                "是否关闭「真实浏览器」并继续？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if ok != QMessageBox.StandardButton.Yes:
+                return False
+        self._set_proxy_only(False, persist=True)
+        self._log("环境绕过：已关闭「真实浏览器」，恢复拟真注入")
+        return True
+
+    def _prepare_bypass_browser_opts(self, opts: dict | None) -> None:
+        """应用 browser_opts：强制 prefer_stealth，开启 Hook / 暴力猴注入通道。"""
+        opts = opts if isinstance(opts, dict) else {}
+        # 绕过方案一律不用真实浏览器
+        if self._is_real_browser():
+            self._set_proxy_only(False, persist=False)
+
+        ch = str(opts.get("browser_channel") or "").strip().lower()
+        if ch in ("chrome", "chromium", "msedge"):
+            if hasattr(self, "_set_browser_channel_ui"):
+                self._set_browser_channel_ui(ch, persist=False)
+            elif hasattr(self, "_on_browser_channel_changed"):
+                self._on_browser_channel_changed(ch)
+
+        # prefer_stealth 缺省 true
+        prefer = opts.get("prefer_stealth", True)
+        if prefer is False:
+            self._log("提示：方案写了 prefer_stealth=false，仍保留通用拟真（推荐）")
+        if "record_mode" in opts and hasattr(self, "_act_record"):
+            self._act_record.setChecked(bool(opts.get("record_mode")))
+        elif prefer and hasattr(self, "_act_record"):
+            # 未指定时默认开记录模式，利于过检
+            self._act_record.setChecked(True)
+
+        # 站点 hook_js 走油猴 userscript + 密桥 Hook 扩展，两者都开
+        self._enable_hook_injection_channels(enable_vm=True)
+
+    def _enable_hook_injection_channels(self, *, enable_vm: bool = True) -> None:
+        """写入/应用 Hook 时：打开密桥 Hook，并按需打开暴力猴。"""
+        if enable_vm and hasattr(self, "_act_vm"):
+            if not self._act_vm.isChecked():
+                self._act_vm.setChecked(True)
+                self._log("已自动开启「油猴（暴力猴）」以便安装/注入 Hook")
+        if hasattr(self, "_act_cb_hook"):
+            self._act_cb_hook.setChecked(True)
+        if hasattr(self, "userscript_enable_check"):
+            self.userscript_enable_check.setChecked(True)
+
+    def _inject_toggle_actions(self) -> list:
+        acts = []
+        for name in (
+            "_act_hook",
+            "_act_anti",
+            "_act_cdp",
+            "_act_rewrite",
+            "_act_vm",
+            "_act_reres",
+            "_act_cb_hook",
+        ):
+            a = getattr(self, name, None)
+            if a is not None:
+                acts.append(a)
+        return acts
+
+    def _snapshot_inject_state(self) -> dict:
+        return {
+            "hook": bool(getattr(self, "_act_hook", None) and self._act_hook.isChecked()),
+            "anti": bool(getattr(self, "_act_anti", None) and self._act_anti.isChecked()),
+            "cdp": bool(getattr(self, "_act_cdp", None) and self._act_cdp.isChecked()),
+            "rewrite": bool(getattr(self, "_act_rewrite", None) and self._act_rewrite.isChecked()),
+            "vm": bool(getattr(self, "_act_vm", None) and self._act_vm.isChecked()),
+            "reres": bool(getattr(self, "_act_reres", None) and self._act_reres.isChecked()),
+            "cb_hook": bool(getattr(self, "_act_cb_hook", None) and self._act_cb_hook.isChecked()),
+            "userscript": bool(
+                getattr(self, "userscript_enable_check", None)
+                and self.userscript_enable_check.isChecked()
+            ),
+        }
+
+    def _apply_inject_snapshot(self, snap: dict | None) -> None:
+        if not snap:
+            return
+        mapping = [
+            ("_act_hook", "hook"),
+            ("_act_anti", "anti"),
+            ("_act_cdp", "cdp"),
+            ("_act_rewrite", "rewrite"),
+            ("_act_vm", "vm"),
+            ("_act_reres", "reres"),
+            ("_act_cb_hook", "cb_hook"),
+        ]
+        for attr, key in mapping:
+            act = getattr(self, attr, None)
+            if act is None:
+                continue
+            act.blockSignals(True)
+            act.setChecked(bool(snap.get(key)))
+            act.setEnabled(True)
+            act.blockSignals(False)
+        if hasattr(self, "userscript_enable_check"):
+            self.userscript_enable_check.blockSignals(True)
+            self.userscript_enable_check.setChecked(bool(snap.get("userscript")))
+            self.userscript_enable_check.blockSignals(False)
+
+    def _clear_all_inject_checks(self) -> None:
+        for act in self._inject_toggle_actions():
+            act.blockSignals(True)
+            act.setChecked(False)
+            act.setEnabled(False)
+            act.blockSignals(False)
+        if hasattr(self, "userscript_enable_check"):
+            self.userscript_enable_check.blockSignals(True)
+            self.userscript_enable_check.setChecked(False)
+            self.userscript_enable_check.blockSignals(False)
+
+    def _update_proxy_only_ui(self) -> None:
+        on = self._is_real_browser()
+        if hasattr(self, "_inject_btn"):
+            self._inject_btn.setText("注入(关)" if on else "注入")
+            self._inject_btn.setToolTip(
+                "真实浏览器模式：不注入任何脚本/扩展"
+                if on
+                else "启动时注入的 Hook / 反调试 / 扩展"
+            )
+        if hasattr(self, "start_btn"):
+            if on:
+                self.start_btn.setToolTip(
+                    "真实浏览器：本机 Chrome/Edge，有头持久，无 Hook/采集/拟真（适合瑞数等挑战站）"
+                )
+            else:
+                self.start_btn.setToolTip("")
+
+    def _set_proxy_only(self, enabled: bool, *, persist: bool = True) -> None:
+        """统一切换真实浏览器模式（菜单项与按钮同步；兼容旧名只代理）。"""
+        enabled = bool(enabled)
+        # 避免互相递归
+        for w in (getattr(self, "_act_proxy_only", None), getattr(self, "proxy_only_btn", None)):
+            if w is None:
+                continue
+            w.blockSignals(True)
+            if hasattr(w, "setChecked"):
+                w.setChecked(enabled)
+            w.blockSignals(False)
+
+        if enabled:
+            if self._inject_snapshot is None:
+                self._inject_snapshot = self._snapshot_inject_state()
+            self._clear_all_inject_checks()
+            # 自动切到本机 Chrome（无则下次启动会回退 Edge）；必须互斥，勿两边同时勾
+            if hasattr(self, "_act_ch_chrome"):
+                cur = self._current_browser_channel()
+                if cur == "chromium":
+                    self._set_browser_channel_ui("chrome", persist=False)
+            if hasattr(self, "_act_record"):
+                self._act_record.blockSignals(True)
+                self._act_record.setChecked(True)
+                self._act_record.blockSignals(False)
+            self._log(
+                "已开「真实浏览器」：本机 Chrome/Edge + 持久 Profile，"
+                "不注入 Hook/采集/拟真（呜呼有头持久思路）"
+            )
+        else:
+            self._apply_inject_snapshot(self._inject_snapshot)
+            self._inject_snapshot = None
+            for act in self._inject_toggle_actions():
+                act.setEnabled(True)
+            self._log("已关「真实浏览器」：恢复注入勾选")
+
+        self._update_proxy_only_ui()
+        if persist:
+            self._save_config()
+
+    def _on_proxy_only_toggled(self, checked: bool) -> None:
+        self._set_proxy_only(checked, persist=True)
+
+    def _on_proxy_only_btn_toggled(self, checked: bool) -> None:
+        self._set_proxy_only(checked, persist=True)
+
     def _is_generated_hook_enabled(self) -> bool:
         """Hook脚本页 / 注入菜单：是否启用已生成脚本。"""
+        if self._is_proxy_only():
+            return False
         if hasattr(self, "userscript_enable_check"):
             return self.userscript_enable_check.isChecked()
         if hasattr(self, "userscript_list") and self.userscript_list.count():
@@ -632,7 +1378,7 @@ class AILabTab(QWidget):
         return scripts
 
     def _set_agent_dialog_mode(self, mode: str) -> None:
-        """同步下方「对话模式」下拉（chat / anti_debug）。"""
+        """同步下方「对话模式」下拉。"""
         combo = getattr(self, "agent_mode_combo", None)
         if combo is None:
             return
@@ -660,6 +1406,64 @@ class AILabTab(QWidget):
                     f"禁止输出加解密 steps。用户说：{goal}"
                 )
             self._start_agent_task(goal, mode="anti_debug")
+        elif mode == "bot_bypass":
+            low = goal.casefold()
+            if (
+                "webdriver" not in low
+                and "绕过" not in goal
+                and "指纹" not in goal
+                and "bot" not in low
+                and "挑战" not in goal
+            ):
+                goal = (
+                    "【绕过检查模式】只分析浏览器环境检测 / Bot / JS 挑战，"
+                    f"输出 browser_opts + hook_js，禁止加解密 steps。用户说：{goal}"
+                )
+            self._start_agent_task(goal, mode="bot_bypass")
+        elif mode == "fingerprint_hook":
+            low = goal.casefold()
+            if (
+                "指纹" not in goal
+                and "fingerprint" not in low
+                and "canvas" not in low
+                and "webgl" not in low
+                and "hook" not in low
+            ):
+                goal = (
+                    "【指纹绕过 HOOK 模式】只分析浏览器指纹采集 / FingerprintJS，"
+                    f"输出 detections + hook_js，禁止加解密 steps。用户说：{goal}"
+                )
+            self._start_agent_task(goal, mode="fingerprint_hook")
+        elif mode == "js_reverse":
+            low = goal.casefold()
+            if (
+                "逆向" not in goal
+                and "encrypt" not in low
+                and "decrypt" not in low
+                and "aes" not in low
+                and "签名" not in goal
+                and "加密" not in goal
+            ):
+                goal = (
+                    "【JS逆向模式】只定位加解密/签名业务函数与字段，"
+                    f"输出 findings/code_locations，禁止 steps。用户说：{goal}"
+                )
+            self._start_agent_task(goal, mode="js_reverse")
+        elif mode == "js_deobfuscate":
+            low = goal.casefold()
+            if (
+                "混淆" not in goal
+                and "解混淆" not in goal
+                and "解密" not in goal
+                and "sojson" not in low
+                and "_0x" not in low
+                and "obfuscat" not in low
+            ):
+                goal = (
+                    "【JS解密模式】只做解混淆/还原加解密相关可读片段，"
+                    f"输出 snippets/deobfuscated_js，禁止 steps。用户说：{goal}"
+                )
+            self._start_agent_task(goal, mode="js_deobfuscate")
         else:
             # 若已指定字段，一并约束自由对话
             self._start_agent_task(self._goal_with_field_targets(goal), mode="chat")
@@ -709,29 +1513,46 @@ class AILabTab(QWidget):
         )
         if result is None:
             return
+        result.pop("analysis_role", None)
         self._field_targets = result
         self._refresh_field_targets_label()
         self._log(f"已设置目标字段：{summarize_field_targets(result)}")
 
-    def _prompt_field_targets(self, *, role: str | None = None) -> bool:
-        """识别/生成前弹出字段选择；取消则返回 False."""
+    def _prompt_field_targets(self, *, role: str | None = None) -> str | None:
+        """弹出字段选择；返回分析角色 decrypt/encrypt，取消返回 None."""
         flows, _, _, _ = self._analysis_payload()
         if not flows:
             # 无流量时仍允许跑（可能只有 hook/js），但无法选字段
             if self._field_targets is None:
-                self._field_targets = {"unrestricted": True, "decrypt": [], "encrypt": [], "resp_decrypt": []}
+                self._field_targets = {
+                    "unrestricted": True,
+                    "decrypt": [],
+                    "encrypt": [],
+                    "resp_decrypt": [],
+                }
                 self._refresh_field_targets_label()
-            return True
+            return "encrypt" if role == "encrypt" else "decrypt"
         initial = dict(self._field_targets) if self._field_targets else {}
+        initial.pop("analysis_role", None)
         default_role = "encrypt" if role == "encrypt" else "decrypt"
         result = ask_field_targets(
             self, flows, initial or None, default_role=default_role,
         )
         if result is None:
-            return False
+            return None
+        analysis_role = result.pop("analysis_role", None)
         self._field_targets = result
         self._refresh_field_targets_label()
-        return True
+        if analysis_role == "encrypt":
+            return "encrypt"
+        if analysis_role == "decrypt":
+            return "decrypt"
+        # 兜底：按已选字段推断
+        if result.get("encrypt") and not (
+            result.get("decrypt") or result.get("resp_decrypt")
+        ):
+            return "encrypt"
+        return "decrypt"
 
     def _goal_with_field_targets(self, goal: str) -> str:
         hint = format_field_targets_hint(self._field_targets)
@@ -763,12 +1584,43 @@ class AILabTab(QWidget):
                     "有脚本后才能分析无限 debugger。",
                 )
                 return
+        elif mode == "bot_bypass":
+            if not self._scripts and not self._flows and not self._hooks:
+                QMessageBox.warning(
+                    self,
+                    "提示",
+                    "请先启动浏览器打开目标站并采集流量 / JS。\n"
+                    "有素材后才能分析浏览器环境检测。",
+                )
+                return
+        elif mode == "fingerprint_hook":
+            if not self._scripts and not self._flows and not self._hooks:
+                QMessageBox.warning(
+                    self,
+                    "提示",
+                    "请先启动浏览器打开目标站并采集流量 / JS。\n"
+                    "有素材后才能分析指纹采集并生成 Hook。",
+                )
+                return
         elif mode == "hash_hook":
             if not self._scripts and not self._hooks and not self._flows:
                 QMessageBox.warning(
                     self,
                     "提示",
                     "请先采集流量 / Hook / JS，再生成哈希明文 Hook。",
+                )
+                return
+        elif mode in ("js_reverse", "js_deobfuscate"):
+            if not self._scripts and not self._hooks:
+                QMessageBox.warning(
+                    self,
+                    "提示",
+                    "请先启动浏览器采集 JS（或勾选已捕获的脚本）。\n"
+                    + (
+                        "有脚本后才能做 JS 逆向定位。"
+                        if mode == "js_reverse"
+                        else "有脚本后才能做 JS 解混淆。"
+                    ),
                 )
                 return
         elif mode != "chat" and not self._has_capture_data():
@@ -789,6 +1641,11 @@ class AILabTab(QWidget):
 
         self.agent_view.appendPlainText(f"\n—— 你 ——\n{goal}\n")
         self.agent_view.appendPlainText("—— Agent ——\n")
+        self._clear_ai_context_views()
+        self._append_ai_context(
+            "request",
+            f"======== Agent 任务 ========\nmode: {mode}\n\n{goal}\n",
+        )
         self._focus_agent_tab()
         self._set_analysis_buttons_enabled(False)
         self.agent_stop_btn.setEnabled(True)
@@ -797,6 +1654,7 @@ class AILabTab(QWidget):
             goal, self._agent_session(), cfg=cfg, mode=mode, parent=self,
         )
         self._agent_worker.log.connect(self._on_agent_log)
+        self._agent_worker.llm_io.connect(self._append_ai_context)
         self._agent_worker.finished_ok.connect(self._on_agent_ok)
         self._agent_worker.failed.connect(self._on_agent_fail)
         self._agent_worker.start()
@@ -810,7 +1668,11 @@ class AILabTab(QWidget):
         if self._agent_worker and self._agent_worker.isRunning():
             self._agent_worker.cancel()
             self._log("正在停止 Agent…")
-            self.agent_view.appendPlainText("\n（请求停止…）\n")
+            self.agent_view.appendPlainText("\n（正在停止 Agent，中断当前请求…）\n")
+            self.agent_view.moveCursor(QTextCursor.MoveOperation.End)
+            self.agent_stop_btn.setText("停止中…")
+            self.agent_stop_btn.setEnabled(False)
+            style_button(self.agent_stop_btn, "danger", size="sm")
 
     def _on_agent_log(self, msg: str):
         self.agent_view.appendPlainText(msg)
@@ -846,6 +1708,11 @@ class AILabTab(QWidget):
     def _on_agent_ok(self, text: str):
         self.agent_view.appendPlainText(f"\n✅ {text}\n")
         self.agent_view.moveCursor(QTextCursor.MoveOperation.End)
+        # 最终结论也记一笔到「上下文 → 响应」（多轮 LLM 原始响应已由 llm_io 写入）
+        self._append_ai_context(
+            "response",
+            "======== Agent 最终输出 ========\n\n" + (text or "").rstrip() + "\n",
+        )
         self._reset_agent_buttons()
         self._set_analysis_buttons_enabled(True)
         self._agent_worker = None
@@ -858,8 +1725,28 @@ class AILabTab(QWidget):
             self._set_agent_dialog_mode("anti_debug")
             return
 
+        if agent_mode == "bot_bypass":
+            self._handle_bot_bypass_agent_result(text)
+            self._set_agent_dialog_mode("bot_bypass")
+            return
+
+        if agent_mode == "fingerprint_hook":
+            self._handle_fingerprint_hook_agent_result(text)
+            self._set_agent_dialog_mode("fingerprint_hook")
+            return
+
         if agent_mode == "hash_hook":
             self._handle_hash_hook_agent_result(text)
+            return
+
+        if agent_mode == "js_reverse":
+            self._handle_js_reverse_agent_result(text)
+            self._set_agent_dialog_mode("js_reverse")
+            return
+
+        if agent_mode == "js_deobfuscate":
+            self._handle_js_deobfuscate_agent_result(text)
+            self._set_agent_dialog_mode("js_deobfuscate")
             return
 
         result = None
@@ -896,7 +1783,7 @@ class AILabTab(QWidget):
             gen_role = self._pending_generate_role or "decrypt"
             self._pending_generate_role = None
             if result and result.get("steps"):
-                self._log("Agent 已产出步骤，正在生成脚本…")
+                self._log("Agent 已产出步骤，先验证加解密再生成…")
                 self._generate_plugin(silent=False, code_role=gen_role)
             else:
                 self._log("Agent 完成但未解析到有效 steps，已跳过生成（可查看 Agent 原文）")
@@ -953,6 +1840,8 @@ class AILabTab(QWidget):
     def _reset_agent_buttons(self):
         self.agent_send_btn.setEnabled(True)
         self.agent_stop_btn.setEnabled(False)
+        self.agent_stop_btn.setText("停止")
+        style_button(self.agent_stop_btn, "ghost", size="sm")
 
     def _build_browser_source(self) -> QWidget:
         """网页采集：URL + 启动 + 流量/Hook."""
@@ -965,14 +1854,18 @@ class AILabTab(QWidget):
 
         capture = QFrame()
         capture.setObjectName("aiCaptureBar")
-        bar = QHBoxLayout(capture)
-        bar.setContentsMargins(0, 0, 0, 8)
+        capture_outer = QVBoxLayout(capture)
+        capture_outer.setContentsMargins(0, 0, 0, 6)
+        capture_outer.setSpacing(4)
+
+        bar = QHBoxLayout()
+        bar.setContentsMargins(0, 0, 0, 0)
         bar.setSpacing(8)
         self.url_edit = QLineEdit()
         self.url_edit.setPlaceholderText("https://example.com  （回车启动）")
         self.url_edit.setMinimumHeight(28)
         self.url_edit.setMaximumHeight(28)
-        self.url_edit.returnPressed.connect(self._start_browser)
+        self.url_edit.returnPressed.connect(self._toggle_browser)
         bar.addWidget(self.url_edit, 1)
 
         # 注入：默认只勾「密钥 Hook」；反调试细节由内置默认 / AI 推荐写入，不再单独展示
@@ -981,6 +1874,7 @@ class AILabTab(QWidget):
         inject_btn.setToolTip("启动时注入的 Hook / 反调试 / 扩展")
         inject_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         inject_menu = QMenu(self)
+        self._inject_btn = inject_btn
 
         self._inject_detail_opts = {
             "functionHook": True,
@@ -991,6 +1885,7 @@ class AILabTab(QWidget):
             "sizeSpoof": True,
             "rewriteResponse": False,
         }
+        self._inject_snapshot: dict | None = None
 
         self._act_hook = inject_menu.addAction("密钥 Hook")
         self._act_hook.setCheckable(True)
@@ -998,6 +1893,11 @@ class AILabTab(QWidget):
         self._act_anti = inject_menu.addAction("反调试")
         self._act_anti.setCheckable(True)
         self._act_anti.setChecked(False)
+        self._act_anti.setToolTip(
+            "开启后：注入 anti_debug、可选响应改写，"
+            "并中和页面反 DevTools 库（防闪一下变 about:blank）。\n"
+            "若某站必须保留反 DevTools，请保持关闭。"
+        )
         self._act_cdp = inject_menu.addAction("CDP 定位 debugger")
         self._act_cdp.setCheckable(True)
         self._act_cdp.setChecked(False)
@@ -1030,27 +1930,123 @@ class AILabTab(QWidget):
         ext_sub.addAction("重新下载油猴…", self._redownload_browser_ext)
 
         inject_menu.addSeparator()
+        self._act_record = inject_menu.addAction("记录模式（持久 Profile）")
+        self._act_record.setCheckable(True)
+        self._act_record.setChecked(True)
+        self._act_record.setToolTip(
+            "勾选：固定 data/browser_profile，Cookie/登录态/扩展长期复用（类似 Burp 浏览器）。\n"
+            "取消：每次临时会话，关闭后清理。"
+        )
+        self._act_record.toggled.connect(lambda _c: self._save_config())
+        browser_sub = inject_menu.addMenu("浏览器引擎")
+        from PyQt6.QtGui import QActionGroup
+
+        self._browser_channel_group = QActionGroup(self)
+        self._browser_channel_group.setExclusive(True)
+        self._act_ch_chromium = browser_sub.addAction("Chromium（内置）")
+        self._act_ch_chromium.setCheckable(True)
+        self._act_ch_chromium.setChecked(True)
+        self._act_ch_chromium.setData("chromium")
+        self._act_ch_chrome = browser_sub.addAction("本机 Chrome")
+        self._act_ch_chrome.setCheckable(True)
+        self._act_ch_chrome.setData("chrome")
+        self._act_ch_chrome.setToolTip(
+            "使用本机已安装的 Google Chrome（仍用密桥独立 Profile，不占用你日常 Chrome 用户目录）"
+        )
+        self._act_ch_msedge = browser_sub.addAction("本机 Edge")
+        self._act_ch_msedge.setCheckable(True)
+        self._act_ch_msedge.setData("msedge")
+        self._act_ch_msedge.setToolTip(
+            "使用本机 Microsoft Edge（独立 Profile；瑞数等挑战站可优先试）"
+        )
+        self._browser_channel_group.addAction(self._act_ch_chromium)
+        self._browser_channel_group.addAction(self._act_ch_chrome)
+        self._browser_channel_group.addAction(self._act_ch_msedge)
+        self._act_ch_chromium.triggered.connect(lambda: self._on_browser_channel_changed("chromium"))
+        self._act_ch_chrome.triggered.connect(lambda: self._on_browser_channel_changed("chrome"))
+        self._act_ch_msedge.triggered.connect(lambda: self._on_browser_channel_changed("msedge"))
+        inject_menu.addSeparator()
         inject_menu.addAction("生成 Hook 脚本…", self._export_hooks_to_tampermonkey)
 
         inject_btn.setMenu(inject_menu)
         style_sidebar_aux_button(inject_btn, icon_only=False)
         bar.addWidget(inject_btn)
 
+        # 兼容旧引用：真实浏览器 / AI绕过 收入「更多」菜单
+        self.proxy_only_btn = QToolButton()
+        self.proxy_only_btn.hide()
+        self.proxy_only_btn.setCheckable(True)
+        self.proxy_only_btn.toggled.connect(self._on_proxy_only_btn_toggled)
+        self.bot_bypass_btn = QPushButton("AI绕过")
+        self.bot_bypass_btn.hide()
+        self.bot_bypass_btn.clicked.connect(self._run_bot_bypass_analyze)
+
         # 兼容旧引用
         self.hook_check = self._act_hook
         self.anti_debug_check = self._act_anti
 
         self.start_btn = QPushButton("启动")
-        self.stop_btn = QPushButton("停止")
-        self.stop_btn.setEnabled(False)
-        self.start_btn.clicked.connect(self._start_browser)
-        self.stop_btn.clicked.connect(self._stop_browser)
+        self.start_btn.clicked.connect(self._toggle_browser)
         style_button(self.start_btn, "primary", size="sm")
-        style_button(self.stop_btn, "ghost", size="sm")
         set_btn_icon(self.start_btn, "browser", size=14)
-        set_btn_icon(self.stop_btn, "stop", size=12)
+        self.start_btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         bar.addWidget(self.start_btn)
-        bar.addWidget(self.stop_btn)
+        # 兼容旧引用：启停合一，隐藏独立停止按钮
+        self.stop_btn = QPushButton("停止")
+        self.stop_btn.hide()
+        self.stop_btn.clicked.connect(self._stop_browser)
+
+        # 「更多」：真实浏览器 / 环境绕过 / 抓包
+        more_btn = QToolButton()
+        more_btn.setText("更多")
+        more_btn.setToolTip("真实浏览器 / 环境绕过（AI） / 独立抓包")
+        more_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        more_menu = QMenu(more_btn)
+        self._act_proxy_only = more_menu.addAction("真实浏览器")
+        self._act_proxy_only.setCheckable(True)
+        self._act_proxy_only.setChecked(False)
+        self._act_proxy_only.setToolTip(
+            "本机 Chrome/Edge + 有头持久 Profile；不注入 Hook/采集/拟真脚本"
+            "（适合瑞数等强 JS 挑战）。测指纹/Bot 检测时请勿勾选。"
+        )
+        self._act_proxy_only.toggled.connect(self._on_proxy_only_toggled)
+        more_menu.addSeparator()
+        bypass_menu = more_menu.addMenu("环境绕过")
+        bypass_menu.setToolTip(
+            "通用拟真底座（CDP/SwiftShader/webdriver，启动自动）\n"
+            "+ AI 只补本站增量 Hook：\n"
+            "· AI 绕过：Bot/挑战/WAF\n"
+            "· 指纹绕过 HOOK：FingerprintJS/canvas 等\n"
+            "瑞数等强挑战请勾「真实浏览器」，勿叠拟真。"
+        )
+        bypass_menu.addAction("AI 绕过（Bot/挑战）…", self._run_bot_bypass_analyze)
+        bypass_menu.addAction("指纹绕过 HOOK…", self._run_fingerprint_hook_analyze)
+        more_menu.addSeparator()
+        more_menu.addAction("抓包获取流量…", self._open_web_capture_dialog)
+        more_btn.setMenu(more_menu)
+        style_sidebar_aux_button(more_btn, icon_only=False)
+        bar.addWidget(more_btn)
+        self._browser_more_btn = more_btn
+
+        # 端口控件（供配置读写；实际展示在抓包弹窗里）
+        self.web_capture_port = QSpinBox()
+        self.web_capture_port.setRange(1024, 65535)
+        self.web_capture_port.setValue(8888)
+        self.web_capture_port.hide()
+        self.web_capture_btn = QPushButton("启动")
+        self.web_capture_btn.hide()
+        self.web_capture_btn.clicked.connect(self._toggle_web_capture)
+        self._web_capture_dlg = None
+
+        capture_outer.addLayout(bar)
+
+        self.next_hint = QLabel()
+        self.next_hint.setObjectName("aiNextHint")
+        self.next_hint.setWordWrap(True)
+        self.next_hint.hide()
+        style_muted_label(self.next_hint)
+        capture_outer.addWidget(self.next_hint)
+
         layout.addWidget(capture)
 
         capture_tabs = QTabWidget()
@@ -1060,10 +2056,6 @@ class AILabTab(QWidget):
         fl = QVBoxLayout(flow_page)
         fl.setContentsMargins(0, 2, 0, 0)
         fl.setSpacing(2)
-        self.flow_empty_hint = QLabel()
-        self.flow_empty_hint.setObjectName("homeEmptyHint")
-        self.flow_empty_hint.setWordWrap(True)
-        fl.addWidget(self.flow_empty_hint)
         flow_bar = QHBoxLayout()
         flow_bar.setSpacing(6)
         self.flow_sort_combo = QComboBox()
@@ -1096,11 +2088,13 @@ class AILabTab(QWidget):
         self.flow_list = QListWidget()
         self.flow_list.setToolTip(
             "单击：右侧「详情」查看请求/响应（Burp 格式）\n"
-            "双击：加载到「请求解析器」\n"
-            "勾选：送入 AI 分析。#N 为捕获顺序。"
+            "右键：转解析器\n"
+            "勾选：送入 AI 分析。#N 为捕获顺序。\n"
+            "说明：静态 .js/.ts 在「JS」页，不在此列表。"
         )
+        self.flow_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.flow_list.customContextMenuRequested.connect(self._on_flow_context_menu)
         self.flow_list.itemClicked.connect(self._on_flow_selected)
-        self.flow_list.itemDoubleClicked.connect(self._on_flow_double_clicked)
         fl.addWidget(self.flow_list, 1)
         capture_tabs.addTab(flow_page, "流量")
 
@@ -1120,9 +2114,20 @@ class AILabTab(QWidget):
         jl.setSpacing(2)
         js_bar = QHBoxLayout()
         js_bar.setSpacing(4)
-        js_hint = QLabel("勾选要分析的 JS")
-        style_muted_label(js_hint)
-        js_bar.addWidget(js_hint, 1)
+        self.js_filter_edit = QLineEdit()
+        self.js_filter_edit.setPlaceholderText("过滤 URL / 搜正文关键字…")
+        self.js_filter_edit.setClearButtonEnabled(True)
+        self.js_filter_edit.setMaximumHeight(26)
+        self.js_filter_edit.textChanged.connect(self._on_js_filter_changed)
+        js_bar.addWidget(self.js_filter_edit, 1)
+        self.js_index_btn = QPushButton("索引")
+        self.js_index_btn.setToolTip(
+            "对当前选中（或勾选）脚本做 enrich 大纲：API/加密点/函数，省 token"
+        )
+        self.js_index_btn.clicked.connect(self._show_js_index_view)
+        style_button(self.js_index_btn, "ghost", size="sm")
+        self.js_index_btn.setMinimumWidth(44)
+        js_bar.addWidget(self.js_index_btn)
         for text, slot in (
             ("全选", lambda: self._set_list_checked(self.js_list, True)),
             ("全不选", lambda: self._set_list_checked(self.js_list, False)),
@@ -1134,7 +2139,10 @@ class AILabTab(QWidget):
             js_bar.addWidget(b)
         jl.addLayout(js_bar)
         self.js_list = QListWidget()
-        self.js_list.setToolTip("网页 / 小程序反编译代码，勾选后优先送入")
+        self.js_list.setToolTip(
+            "勾选后送入 AI。点选：详情「请求」=索引，「响应」=源码。\n"
+            "过滤框可筛 URL 或搜正文；「索引」批量生成大纲。"
+        )
         self.js_list.itemClicked.connect(self._on_js_selected)
         jl.addWidget(self.js_list, 1)
         capture_tabs.addTab(js_page, "JS")
@@ -1212,9 +2220,41 @@ class AILabTab(QWidget):
             user_scripts = False
         return flows, scripts, user_flows, user_scripts
 
+    def _js_filter_query(self) -> str:
+        edit = getattr(self, "js_filter_edit", None)
+        if edit is None:
+            return ""
+        return (edit.text() or "").strip()
+
+    def _script_matches_filter(self, url: str, content: str, query: str) -> bool:
+        if not query:
+            return True
+        q = query.casefold()
+        if q in (url or "").casefold():
+            return True
+        # 正文搜索：限制长度，避免卡 UI
+        body = content or ""
+        if len(body) > 200_000:
+            body = body[:200_000]
+        return q in body.casefold()
+
+    def _on_js_filter_changed(self, _text: str = "") -> None:
+        self._refresh_js_list()
+
     def _refresh_js_list(self) -> None:
         if not hasattr(self, "js_list"):
             return
+        # 清掉已误入的二进制 / 验证码项
+        for u, c in list(self._scripts.items()):
+            low = str(u).lower()
+            if self._looks_binary_preview(c) or any(
+                n in low
+                for n in (
+                    "imgcode", "img_code", "captcha", "verifycode",
+                    "checkcode", "imagecode",
+                )
+            ):
+                self._scripts.pop(u, None)
         prev_checked = set(self._checked_script_urls())
         prev_all: set[str] = set()
         for i in range(self.js_list.count()):
@@ -1224,8 +2264,12 @@ class AILabTab(QWidget):
             u = item.data(Qt.ItemDataRole.UserRole)
             if u:
                 prev_all.add(str(u))
+        query = self._js_filter_query()
         self.js_list.clear()
-        for url in self._scripts:
+        shown = 0
+        for url, content in self._scripts.items():
+            if not self._script_matches_filter(url, content or "", query):
+                continue
             short = url if len(url) <= 90 else ("…" + url[-87:])
             # 默认全选；仅保留用户主动取消勾选的旧项
             if url in prev_all and url not in prev_checked:
@@ -1233,15 +2277,117 @@ class AILabTab(QWidget):
             else:
                 checked = True
             self.js_list.addItem(self._make_check_item(short, url, checked=checked))
+            shown += 1
+        if query and hasattr(self, "js_filter_edit"):
+            self.js_filter_edit.setToolTip(
+                f"过滤「{query}」：显示 {shown}/{len(self._scripts)} 个"
+            )
+        self._refresh_capture_tab_labels()
+
+    def _format_js_index_text(self, url: str, content: str) -> str:
+        from core.script_enrich import enrich_source, format_enrich, normalize_script_text
+
+        view = normalize_script_text(content or "")
+        report = enrich_source(url, view)
+        return format_enrich(report)
+
+    def _show_js_index_view(self) -> None:
+        """批量索引：当前选中优先，否则勾选（最多 12 个）。"""
+        urls: list[str] = []
+        cur = self.js_list.currentItem() if hasattr(self, "js_list") else None
+        if cur is not None:
+            u = cur.data(Qt.ItemDataRole.UserRole)
+            if u and str(u) in self._scripts:
+                urls.append(str(u))
+        if not urls:
+            urls = [u for u in self._checked_script_urls() if u in self._scripts]
+        urls = urls[:12]
+        if not urls:
+            QMessageBox.information(self, "提示", "请先在 JS 列表点选或勾选脚本")
+            return
+        parts: list[str] = [
+            f"# JS 索引（enrich）共 {len(urls)} 个 — 全文在本地，此处仅大纲",
+            "",
+        ]
+        for u in urls:
+            try:
+                parts.append(self._format_js_index_text(u, self._scripts.get(u, "")))
+            except Exception as e:
+                parts.append(f"[enrich] {u}\n  error: {e}")
+            parts.append("")
+        index_text = "\n".join(parts).rstrip() + "\n"
+        # 请求页放索引；响应页放当前选中源码（若有）
+        body = ""
+        if cur is not None:
+            u = str(cur.data(Qt.ItemDataRole.UserRole) or "")
+            if u in self._scripts:
+                try:
+                    from core.script_enrich import normalize_script_text
+
+                    view = normalize_script_text(self._scripts[u])
+                except Exception:
+                    view = self._scripts[u]
+                limit = 24_000
+                body = (
+                    f"// {u}\n\n"
+                    + (view if len(view) <= limit else view[:limit] + "\n…(截断)")
+                )
+        self._show_detail_text(index_text, body)
+        self.result_tabs.setCurrentWidget(self.flow_detail_tabs)
+        if hasattr(self, "flow_detail_tabs"):
+            self.flow_detail_tabs.setCurrentIndex(0)
+            self.flow_detail_tabs.setTabText(0, "索引")
+            self.flow_detail_tabs.setTabText(1, "源码")
+        self._set_hint(f"已生成 {len(urls)} 个脚本索引 → 详情「索引」页", kind="ok")
 
     def _on_js_selected(self, item: QListWidgetItem) -> None:
         url = item.data(Qt.ItemDataRole.UserRole) if item else None
         if not url or url not in self._scripts:
             return
         content = self._scripts[url]
-        preview = content if len(content) <= 8000 else content[:8000] + "\n…(截断)"
-        self._show_detail_text(f"// {url}\n\n{preview}", "")
+        if self._looks_binary_preview(content):
+            preview = (
+                f"// {url}\n\n"
+                "（这不是 JS 源码，而是图片/二进制响应，已跳过乱码展示）\n"
+                f"{content[:200] if str(content).startswith('(binary') else ''}"
+            )
+            self._show_detail_text(preview, "")
+        else:
+            try:
+                from core.script_enrich import normalize_script_text
+
+                view = normalize_script_text(content)
+            except Exception:
+                view = content
+            try:
+                index_text = self._format_js_index_text(str(url), view)
+            except Exception as e:
+                index_text = f"[enrich] {url}\n  error: {e}"
+            limit = 24_000
+            preview = view if len(view) <= limit else view[:limit] + (
+                "\n…(截断，全文已入库；过滤框可搜正文，Agent 用 script.search/read)"
+            )
+            # 「请求」=索引大纲，「响应」=源码正文
+            self._show_detail_text(index_text, f"// {url}\n\n{preview}")
         self.result_tabs.setCurrentWidget(self.flow_detail_tabs)
+        if hasattr(self, "flow_detail_tabs"):
+            self.flow_detail_tabs.setTabText(0, "索引")
+            self.flow_detail_tabs.setTabText(1, "源码")
+            self.flow_detail_tabs.setCurrentIndex(0)
+
+    @staticmethod
+    def _looks_binary_preview(text: str | None) -> bool:
+        if not text:
+            return False
+        s = str(text)
+        if s.startswith("(binary"):
+            return True
+        sample = s[:3000]
+        if sample.count("\ufffd") > max(12, len(sample) // 25):
+            return True
+        if "\x00" in sample[:200]:
+            return True
+        return False
 
     def _pick_steps_dialog(self, steps: list[dict], *, title: str = "选择要写入的步骤") -> list[dict] | None:
         """勾选分析结果中的步骤，取消返回 None."""
@@ -1393,7 +2539,19 @@ class AILabTab(QWidget):
             self._act_vm.setChecked(bool(browser.get("load_violentmonkey", True)))
             self._act_reres.setChecked(bool(browser.get("load_reres", True)))
             self._act_cb_hook.setChecked(bool(browser.get("load_cb_hook", True)))
-        if hasattr(self, "userscript_enable_check"):
+        if hasattr(self, "_act_record"):
+            self._act_record.setChecked(bool(browser.get("record_mode", True)))
+        if hasattr(self, "_act_proxy_only") or hasattr(self, "proxy_only_btn"):
+            from core.ai_config import is_real_browser_cfg
+
+            # 加载时应用真实浏览器（兼容旧键 proxy_only；不写回）
+            self._set_proxy_only(is_real_browser_cfg(browser), persist=False)
+        if hasattr(self, "_act_ch_chromium"):
+            from core.ai_config import normalize_browser_channel
+
+            ch = normalize_browser_channel(browser.get("browser_channel"))
+            self._set_browser_channel_ui(ch, persist=False)
+        if hasattr(self, "userscript_enable_check") and not self._is_proxy_only():
             self.userscript_enable_check.blockSignals(True)
             self.userscript_enable_check.setChecked(bool(browser.get("load_cb_hook", True)))
             self.userscript_enable_check.blockSignals(False)
@@ -1401,9 +2559,53 @@ class AILabTab(QWidget):
         last_url = (browser.get("last_url") or "").strip()
         if last_url and not self.url_edit.text().strip():
             self.url_edit.setText(last_url)
+        if hasattr(self, "web_capture_port"):
+            try:
+                port = int(browser.get("web_capture_port") or 8888)
+            except Exception:
+                port = 8888
+            self.web_capture_port.setValue(max(1024, min(65535, port)))
 
     def _browser_cfg(self) -> dict:
         return load_ai_config().get("browser", {})
+
+    def _current_browser_channel(self) -> str:
+        if hasattr(self, "_act_ch_msedge") and self._act_ch_msedge.isChecked():
+            return "msedge"
+        if hasattr(self, "_act_ch_chrome") and self._act_ch_chrome.isChecked():
+            return "chrome"
+        return "chromium"
+
+    def _set_browser_channel_ui(self, channel: str, *, persist: bool = False) -> None:
+        """互斥勾选浏览器引擎（避免 Chromium/Chrome 同时打勾）。"""
+        from core.ai_config import normalize_browser_channel
+
+        ch = normalize_browser_channel(channel)
+        mapping = {
+            "chromium": getattr(self, "_act_ch_chromium", None),
+            "chrome": getattr(self, "_act_ch_chrome", None),
+            "msedge": getattr(self, "_act_ch_msedge", None),
+        }
+        # 先全部取消再勾选目标；blockSignals 时 QActionGroup 不会自动互斥
+        for key, act in mapping.items():
+            if act is None:
+                continue
+            act.blockSignals(True)
+            act.setChecked(False)
+            act.blockSignals(False)
+        target = mapping.get(ch) or mapping.get("chromium")
+        if target is not None:
+            target.blockSignals(True)
+            target.setChecked(True)
+            target.blockSignals(False)
+        if persist:
+            self._save_config()
+
+    def _on_browser_channel_changed(self, channel: str) -> None:
+        self._set_browser_channel_ui(channel, persist=True)
+        from core.playwright_env import channel_label
+
+        self._log(f"浏览器引擎已切换为：{channel_label(channel)}（下次启动生效）")
 
     def _save_config(self):
         """同步注入勾选 / last_url 到配置文件."""
@@ -1411,24 +2613,55 @@ class AILabTab(QWidget):
         browser = cfg.get("browser", {})
         if not isinstance(browser, dict):
             browser = {}
+        proxy_only = self._is_real_browser()
+        # 真实浏览器时勾选被清空，持久化用快照，避免关掉后全丢
+        snap = self._inject_snapshot if proxy_only else None
         if hasattr(self, "_act_hook"):
-            browser["hook_enabled"] = self._act_hook.isChecked()
-            browser["anti_debug"] = self._act_anti.isChecked()
-            browser["cdp_skip_pauses"] = self._act_cdp.isChecked()
-            browser["inject_opts"] = self._inject_opts_from_ui()
-        if hasattr(self, "_act_vm"):
-            browser["load_violentmonkey"] = self._act_vm.isChecked()
-            browser["load_reres"] = self._act_reres.isChecked()
-            # Hook脚本页勾选优先
-            if hasattr(self, "userscript_enable_check"):
-                browser["load_cb_hook"] = self.userscript_enable_check.isChecked()
-                if hasattr(self, "_act_cb_hook"):
-                    self._act_cb_hook.setChecked(browser["load_cb_hook"])
+            if snap:
+                browser["hook_enabled"] = bool(snap.get("hook"))
+                browser["anti_debug"] = bool(snap.get("anti"))
+                browser["cdp_skip_pauses"] = bool(snap.get("cdp"))
+                browser["inject_opts"] = self._inject_opts_from_ui()
+                if "rewrite" in snap:
+                    opts = dict(browser.get("inject_opts") or {})
+                    opts["rewriteResponse"] = bool(snap.get("rewrite"))
+                    browser["inject_opts"] = opts
             else:
-                browser["load_cb_hook"] = self._act_cb_hook.isChecked()
+                browser["hook_enabled"] = self._act_hook.isChecked()
+                browser["anti_debug"] = self._act_anti.isChecked()
+                browser["cdp_skip_pauses"] = self._act_cdp.isChecked()
+                browser["inject_opts"] = self._inject_opts_from_ui()
+        if hasattr(self, "_act_vm"):
+            if snap:
+                browser["load_violentmonkey"] = bool(snap.get("vm"))
+                browser["load_reres"] = bool(snap.get("reres"))
+                browser["load_cb_hook"] = bool(snap.get("cb_hook") or snap.get("userscript"))
+            else:
+                browser["load_violentmonkey"] = self._act_vm.isChecked()
+                browser["load_reres"] = self._act_reres.isChecked()
+                if hasattr(self, "userscript_enable_check"):
+                    browser["load_cb_hook"] = self.userscript_enable_check.isChecked()
+                    if hasattr(self, "_act_cb_hook"):
+                        self._act_cb_hook.setChecked(browser["load_cb_hook"])
+                else:
+                    browser["load_cb_hook"] = self._act_cb_hook.isChecked()
+        if hasattr(self, "_act_record"):
+            browser["record_mode"] = self._act_record.isChecked()
+        if hasattr(self, "_act_proxy_only") or hasattr(self, "proxy_only_btn"):
+            browser["real_browser"] = proxy_only
+            browser["proxy_only"] = proxy_only  # 兼容旧配置键
+        if hasattr(self, "_act_ch_chrome"):
+            if hasattr(self, "_act_ch_msedge") and self._act_ch_msedge.isChecked():
+                browser["browser_channel"] = "msedge"
+            elif self._act_ch_chrome.isChecked():
+                browser["browser_channel"] = "chrome"
+            else:
+                browser["browser_channel"] = "chromium"
         url = self.url_edit.text().strip()
         if url:
             browser["last_url"] = url
+        if hasattr(self, "web_capture_port"):
+            browser["web_capture_port"] = int(self.web_capture_port.value())
         cfg["browser"] = browser
         save_ai_config(cfg)
 
@@ -1460,7 +2693,7 @@ class AILabTab(QWidget):
         if self._busy:
             return
         ready = self._has_capture_data()
-        for btn in (self.recognize_btn, self.gen_decrypt_btn, self.gen_encrypt_btn):
+        for btn in (self.recognize_btn, self.gen_decrypt_btn):
             btn.setEnabled(ready)
         self._act_hook_analyze.setEnabled(ready)
         tip = (
@@ -1469,8 +2702,9 @@ class AILabTab(QWidget):
             else "请先在左侧「网页 / 小程序 / App」采集或反编译"
         )
         self.recognize_btn.setToolTip(f"识别加解密线索（不写文件）— {tip}")
-        self.gen_decrypt_btn.setToolTip(f"写出解密端 plugin.py — {tip}")
-        self.gen_encrypt_btn.setToolTip(f"写出加密端 plugin.py — {tip}")
+        self.gen_decrypt_btn.setToolTip(
+            f"选字段并点亮解密/加密后分析写出 plugin.py — {tip}"
+        )
 
     def _log(self, msg: str):
         self._log_buf.append(msg)
@@ -1528,16 +2762,29 @@ class AILabTab(QWidget):
             idxs.sort(key=seq_of)
         return idxs
 
-    def _flow_list_label(self, idx: int, flow: dict, *, list_prefix: str = "") -> str:
+    def _flow_list_label(self, idx: int, flow: dict, *, list_prefix: str = ""):
+        from core.flow_format import is_pending_response_body
+
         seq = flow.get("_seq") if isinstance(flow.get("_seq"), int) else idx + 1
         status = flow.get("status", "")
         method = flow.get("method", "")
         url = str(flow.get("url") or "")[:72]
-        pending = status == 0 and flow.get("response_body") == "(等待响应…)"
+        body = str(flow.get("response_body") or "")
+        pending = (not status or int(status or 0) == 0) and is_pending_response_body(
+            flow.get("response_body")
+        )
         mid = "… " if pending else ""
+        tag = ""
+        if body.startswith("(binary") or flow.get("body_kind") == "binary" or flow.get("response_body_b64"):
+            tag = "[二进制] "
+        elif any(
+            n in url.lower()
+            for n in ("imgcode", "captcha", "verifycode", "checkcode", "imagecode")
+        ):
+            tag = "[图片] "
         if pending:
-            return f"{list_prefix}#{seq} {mid}{method} {url}"
-        return f"{list_prefix}#{seq} [{status}] {method} {url}"
+            return f"{list_prefix}#{seq} {mid}{tag}{method} {url}"
+        return f"{list_prefix}#{seq} [{status}] {tag}{method} {url}"
 
     def _rebuild_flow_list_view(self) -> None:
         """按当前排序重排流量列表，保留勾选与选中项."""
@@ -1637,6 +2884,11 @@ class AILabTab(QWidget):
             "url": url,
             "mitm_port": port,
             "use_mitm_proxy": True,
+            "hint": (
+                f"已接入解密代理 127.0.0.1:{port}；"
+                "在原页面再登录一次即可验证解密（采集数据已保留）。"
+            ),
+            "preserve_capture": True,
         }
         self._log(
             f"解密端已启动 → 正在把网页浏览器切到 127.0.0.1:{port}（保留已采流量/Hook/JS）…"
@@ -1656,6 +2908,28 @@ class AILabTab(QWidget):
             return is_port_in_use(int(port), "127.0.0.1")
         except Exception:
             return False
+
+    def _toggle_browser(self):
+        """启动 / 停止 共用一个按钮。"""
+        if self._worker and self._worker.isRunning():
+            self._stop_browser()
+        else:
+            self._start_browser()
+
+    def _set_browser_btn_running(self, running: bool) -> None:
+        if not hasattr(self, "start_btn"):
+            return
+        if running:
+            self.start_btn.setText("停止")
+            style_button(self.start_btn, "danger", size="sm")
+            set_btn_icon(self.start_btn, "stop", size=14)
+            self.stop_btn.setEnabled(True)
+        else:
+            self.start_btn.setText("启动")
+            style_button(self.start_btn, "primary", size="sm")
+            set_btn_icon(self.start_btn, "browser", size=14)
+            self.stop_btn.setEnabled(False)
+        self.start_btn.setEnabled(True)
 
     def _start_browser(self):
         url = self.url_edit.text().strip()
@@ -1739,22 +3013,52 @@ class AILabTab(QWidget):
             url = "https://" + url
         self.url_edit.setText(url)
 
+        proxy_only = self._is_real_browser()
+        if proxy_only:
+            hook_on = anti_on = cdp_on = False
+            load_vm = load_reres = load_cb = False
+            inject_opts = dict(self._inject_detail_opts or {})
+            # 真实浏览器：不做响应改写
+            inject_opts["rewriteResponse"] = False
+        else:
+            hook_on = self._act_hook.isChecked()
+            anti_on = self._act_anti.isChecked()
+            cdp_on = self._act_cdp.isChecked()
+            load_vm = bool(getattr(self, "_act_vm", None) and self._act_vm.isChecked())
+            load_reres = bool(
+                getattr(self, "_act_reres", None) and self._act_reres.isChecked()
+            )
+            load_cb = self._is_generated_hook_enabled()
+            inject_opts = self._inject_opts_from_ui()
+
+        if hasattr(self, "_act_ch_msedge") and self._act_ch_msedge.isChecked():
+            ch = "msedge"
+        elif hasattr(self, "_act_ch_chrome") and self._act_ch_chrome.isChecked():
+            ch = "chrome"
+        else:
+            ch = "chromium"
+        if proxy_only and ch == "chromium":
+            ch = "chrome"
+
         self._worker = BrowserLabWorker(
             url=url,
-            hook_enabled=self._act_hook.isChecked(),
-            anti_debug=self._act_anti.isChecked(),
-            cdp_skip_pauses=self._act_cdp.isChecked(),
-            inject_opts=self._inject_opts_from_ui(),
+            hook_enabled=hook_on,
+            anti_debug=anti_on,
+            cdp_skip_pauses=cdp_on,
+            inject_opts=inject_opts,
             use_mitm_proxy=bool(use_mitm_proxy),
             mitm_port=int(mitm_port),
-            load_violentmonkey=bool(
-                getattr(self, "_act_vm", None) and self._act_vm.isChecked()
-            ),
-            load_reres=bool(
-                getattr(self, "_act_reres", None) and self._act_reres.isChecked()
-            ),
-            load_cb_hook=self._is_generated_hook_enabled(),
+            load_violentmonkey=load_vm,
+            load_reres=load_reres,
+            load_cb_hook=load_cb,
             ext_proxy=ext_proxy or None,
+            record_mode=True if proxy_only else (
+                bool(
+                    getattr(self, "_act_record", None) and self._act_record.isChecked()
+                ) if hasattr(self, "_act_record") else bool(browser.get("record_mode", True))
+            ),
+            browser_channel=ch,
+            real_browser=proxy_only,
         )
         self._worker.log.connect(self._log)
         self._worker.flow_captured.connect(self._on_flow)
@@ -1763,17 +3067,23 @@ class AILabTab(QWidget):
         self._worker.script_captured.connect(self._on_script)
         self._worker.stopped.connect(self._on_browser_stopped)
         self._worker.start()
-        self.start_btn.setEnabled(False)
-        self.stop_btn.setEnabled(True)
-        self.start_btn.setText("采集中…")
+        self._set_browser_btn_running(True)
         self._update_flow_empty_hint()
+        if proxy_only:
+            mode_tip = "【真实浏览器】"
+        else:
+            mode_tip = ""
         if use_mitm_proxy:
             default_hint = (
-                f"浏览器已经解密端 127.0.0.1:{mitm_port}；请在页面复测，流量应出现在 Burp。"
-            )
+                f"{mode_tip}浏览器已经解密端 127.0.0.1:{mitm_port}；请在页面复测，流量应出现在 Burp。"
+            ).strip()
         else:
             default_hint = (
-                "浏览器已启动，请在页面操作以产生流量；采到数据后即可生成代理。"
+                f"{mode_tip}浏览器已启动，请在页面操作以产生流量；采到数据后即可生成代理。"
+            ).strip()
+        if proxy_only:
+            self._log(
+                "真实浏览器启动：本机 Chrome/Edge，无 Hook / 采集脚本 / 拟真注入"
             )
         self._set_hint(hint or default_hint, kind="info")
         self.result_tabs.setCurrentWidget(self.log_view)
@@ -1785,29 +3095,30 @@ class AILabTab(QWidget):
             self._worker.stop()
 
     def _on_browser_stopped(self):
-        self.start_btn.setEnabled(True)
-        self.stop_btn.setEnabled(False)
-        self.start_btn.setText("启动")
-        set_btn_icon(self.start_btn, "browser", size=14)
+        self._set_browser_btn_running(False)
         self._worker = None
         pending = self._pending_proxy_restart
         self._pending_proxy_restart = None
         if pending:
-            # 不清理已采数据；稍等 profile 释放后再带代理启动
+            # 不清理已采数据；稍等 profile 释放后再带代理/Hook 启动
             port = int(pending.get("mitm_port") or 8083)
             url = str(pending.get("url") or "").strip()
+            use_mitm = bool(pending.get("use_mitm_proxy"))
+            hint = str(pending.get("hint") or "").strip() or (
+                "浏览器已自动重启，Hook/扩展已生效"
+            )
 
             def _do_restart():
                 self._launch_lab_browser(
                     url=url,
-                    use_mitm_proxy=True,
+                    use_mitm_proxy=use_mitm,
                     mitm_port=port,
-                    hint=(
-                        f"已接入解密代理 127.0.0.1:{port}；"
-                        "在原页面再登录一次即可验证解密（采集数据已保留）。"
-                    ),
+                    hint=hint,
                 )
-                self._log(f"网页浏览器已用代理 127.0.0.1:{port} 重新打开")
+                if use_mitm:
+                    self._log(f"网页浏览器已用代理 127.0.0.1:{port} 重新打开")
+                else:
+                    self._log("网页浏览器已自动重新打开（Hook/扩展已加载）")
 
             QTimer.singleShot(800, _do_restart)
             self._update_next_hint()
@@ -1913,7 +3224,12 @@ class AILabTab(QWidget):
             idx = flow.get("_index")
         if idx is None or idx < 0 or idx >= len(self._flows):
             # Playwright 后到且 key 未登记：尝试按 method+url+body 匹配最近一条
-            if flow.get("_headers_patch") or (flow.get("source") == "playwright"):
+            src = str(flow.get("source") or "")
+            if flow.get("_headers_patch") or src in (
+                "playwright",
+                "web-proxy",
+                "miniprogram-proxy",
+            ):
                 idx = self._find_flow_index_for_merge(flow)
             if idx is None:
                 return
@@ -1930,8 +3246,14 @@ class AILabTab(QWidget):
             if clean.get("status"):
                 prev["status"] = clean.get("status")
             rb = (clean.get("response_body") or "").strip()
-            if rb and rb not in ("(等待响应…)", "(等待响应...)"):
+            from core.flow_format import is_pending_response_body
+
+            if rb and not is_pending_response_body(rb):
                 prev["response_body"] = clean.get("response_body")
+            if clean.get("response_body_b64"):
+                prev["response_body_b64"] = clean.get("response_body_b64")
+                prev["response_body_len"] = clean.get("response_body_len")
+                prev["body_kind"] = clean.get("body_kind") or "binary"
             self._flows[idx] = prev
             clean = prev
         else:
@@ -1946,6 +3268,13 @@ class AILabTab(QWidget):
             )
             if not (clean.get("request_body") or "").strip() and (prev.get("request_body") or "").strip():
                 clean["request_body"] = prev.get("request_body")
+            # 保留二进制原始 Base64
+            if clean.get("response_body_b64"):
+                pass
+            elif prev.get("response_body_b64"):
+                clean["response_body_b64"] = prev.get("response_body_b64")
+                clean["response_body_len"] = prev.get("response_body_len")
+                clean["body_kind"] = clean.get("body_kind") or prev.get("body_kind")
             self._flows[idx] = clean
 
         if update_browser_list:
@@ -1984,10 +3313,245 @@ class AILabTab(QWidget):
     def _on_script(self, item: dict):
         url = item.get("url", "")
         content = item.get("content", "")
-        if url and content:
-            self._scripts[url] = content
-            self._refresh_js_list()
-            self._refresh_capture_stats()
+        if not url or not content:
+            return
+        # 过滤验证码图等误入 JS 的二进制
+        if self._looks_binary_preview(content):
+            return
+        if not self._looks_like_js_flow({
+            "url": url,
+            "response_body": content,
+            "response_headers": {},
+        }):
+            # 无 .js 后缀时，至少正文要像脚本
+            path = str(url).split("?", 1)[0].lower()
+            if not (path.endswith(".js") or path.endswith(".mjs") or path.endswith(".cjs")):
+                head = str(content).lstrip()[:80]
+                if not head.startswith((
+                    "!", "(", "{", "var ", "const ", "let ", "function",
+                    "\"use strict", "'use strict", "//", "/*", "import ",
+                    "<!DOCTYPE", "<html",
+                )):
+                    return
+        try:
+            from core.script_enrich import normalize_script_text
+
+            content = normalize_script_text(content)
+        except Exception:
+            pass
+        self._scripts[url] = content
+        self._refresh_js_list()
+        self._refresh_capture_stats()
+
+    # ------------------------------------------------------------------
+    # 网页独立抓包（不改系统代理，与「启动」浏览器无关）
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _looks_like_js_flow(flow: dict) -> bool:
+        url = str(flow.get("url") or "").lower()
+        body = str(flow.get("response_body") or "")
+        if body.startswith("(binary") or body.startswith("(等待"):
+            return False
+        # 验证码 / 图片接口不进 JS
+        if any(
+            n in url
+            for n in (
+                "imgcode", "img_code", "captcha", "verifycode", "checkcode",
+                "vcode", "imagecode", "/image/", "/img/",
+            )
+        ):
+            return False
+        headers = flow.get("response_headers") or {}
+        if not isinstance(headers, dict):
+            headers = {}
+        ct = ""
+        for k, v in headers.items():
+            if str(k).lower() == "content-type":
+                ct = str(v).lower()
+                break
+        if ct.startswith(("image/", "audio/", "video/", "font/")) or "octet-stream" in ct:
+            return False
+        if "javascript" in ct or "ecmascript" in ct:
+            return True
+        path = url.split("?", 1)[0]
+        if path.endswith(".js") or path.endswith(".mjs") or path.endswith(".cjs"):
+            return True
+        # webpack chunk 等：/static/js/xxx 且 body 像 JS
+        if "/js/" in path and body and not body.startswith("(等待"):
+            head = body.lstrip()[:80]
+            if head.startswith(("!", "(", "var ", "const ", "let ", "function", "\"use strict", "'use strict")):
+                return True
+        return False
+
+    def _toggle_web_capture(self):
+        cap = self._web_capture
+        if cap is not None and getattr(cap, "running", False):
+            self._stop_web_capture()
+        else:
+            self._start_web_capture()
+
+    def _open_web_capture_dialog(self):
+        """更多 → 抓包获取流量：弹出端口 + 启停界面。"""
+        dlg = getattr(self, "_web_capture_dlg", None)
+        if dlg is None:
+            dlg = self._build_web_capture_dialog()
+            self._web_capture_dlg = dlg
+        self._sync_web_capture_dialog_ui()
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+
+    def _build_web_capture_dialog(self) -> QDialog:
+        dlg = QDialog(self)
+        dlg.setWindowTitle("抓包获取流量")
+        dlg.setModal(False)
+        dlg.setFixedWidth(320)
+        root = QVBoxLayout(dlg)
+        root.setContentsMargins(14, 12, 14, 12)
+        root.setSpacing(10)
+
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        row.addWidget(QLabel("端口"))
+        self.web_capture_port.setParent(dlg)
+        self.web_capture_port.show()
+        self.web_capture_port.setFixedWidth(88)
+        self.web_capture_port.setToolTip(
+            "浏览器 HTTP/HTTPS 代理设为 127.0.0.1:此端口；不改系统代理"
+        )
+        row.addWidget(self.web_capture_port)
+        row.addStretch(1)
+
+        self.web_capture_btn.setParent(dlg)
+        self.web_capture_btn.show()
+        self.web_capture_btn.setMinimumWidth(72)
+        style_button(self.web_capture_btn, "primary", size="sm")
+        set_btn_icon(self.web_capture_btn, "play", size=12)
+        row.addWidget(self.web_capture_btn)
+
+        close_btn = QPushButton("关闭")
+        style_button(close_btn, "ghost", size="sm")
+        close_btn.clicked.connect(dlg.hide)
+        row.addWidget(close_btn)
+        root.addLayout(row)
+
+        self._web_capture_status = QLabel("")
+        style_muted_label(self._web_capture_status)
+        root.addWidget(self._web_capture_status)
+        return dlg
+
+    def _sync_web_capture_dialog_ui(self):
+        """按当前抓包状态刷新弹窗按钮文案。"""
+        running = (
+            self._web_capture is not None
+            and getattr(self._web_capture, "running", False)
+        )
+        if running:
+            port = int(self.web_capture_port.value())
+            self.web_capture_btn.setText("停止")
+            style_button(self.web_capture_btn, "danger", size="sm")
+            set_btn_icon(self.web_capture_btn, "stop", size=12)
+            self.web_capture_port.setEnabled(False)
+            st = getattr(self, "_web_capture_status", None)
+            if st is not None:
+                st.setText(f"监听中 127.0.0.1:{port}")
+        else:
+            self.web_capture_btn.setText("启动")
+            style_button(self.web_capture_btn, "primary", size="sm")
+            set_btn_icon(self.web_capture_btn, "play", size=12)
+            self.web_capture_port.setEnabled(True)
+            st = getattr(self, "_web_capture_status", None)
+            if st is not None:
+                st.setText("未启动")
+
+    def _start_web_capture(self):
+        from core.miniprogram_capture import MiniprogramCaptureWorker
+
+        if self._web_capture is None:
+            self._web_capture = MiniprogramCaptureWorker(self)
+            self._web_capture.flow_captured.connect(self._on_web_capture_flow)
+            self._web_capture.flow_updated.connect(self._on_web_capture_flow_updated)
+            self._web_capture.log.connect(self._log)
+            self._web_capture.started.connect(self._on_web_capture_started)
+            self._web_capture.stopped.connect(self._on_web_capture_stopped)
+            self._web_capture.failed.connect(self._on_web_capture_failed)
+
+        port = int(self.web_capture_port.value())
+        self._save_config()
+        self._web_capture.start(
+            port,
+            use_system_proxy=False,
+            host_filter="",
+            block_noise=True,
+            source_tag="web-proxy",
+        )
+
+    def _stop_web_capture(self):
+        if self._web_capture is not None:
+            self._web_capture.stop()
+
+    def _on_web_capture_started(self, port: int):
+        self._sync_web_capture_dialog_ui()
+        self._log(f"网页抓包已监听 127.0.0.1:{port}（请手动设置浏览器代理）")
+        self._set_hint(f"抓包中 :{port} — 请把浏览器代理指到此端口", kind="busy")
+        # 弹窗已展示说明时不再弹阻塞框；无弹窗时仍提示一次
+        dlg = getattr(self, "_web_capture_dlg", None)
+        if dlg is None or not dlg.isVisible():
+            QMessageBox.information(
+                self,
+                "网页抓包已启动",
+                f"已在 127.0.0.1:{port} 启动抓包代理（未修改系统代理）。\n\n"
+                f"请把浏览器代理设为 127.0.0.1:{port}。\n"
+                f"HTTPS 需信任 mitmproxy 证书（密桥「设置 → 证书」）。",
+            )
+
+    def _on_web_capture_stopped(self):
+        self._sync_web_capture_dialog_ui()
+        self._log("网页抓包已停止")
+        self._update_next_hint()
+
+    def _on_web_capture_failed(self, err: str):
+        QMessageBox.warning(self, "网页抓包失败", err)
+        self._log(f"网页抓包失败: {err}")
+        self._on_web_capture_stopped()
+
+    def _on_web_capture_flow(self, flow: dict):
+        """request 阶段：疑似 JS 的 URL 先不进流量，等响应进 JS 列表。"""
+        if not isinstance(flow, dict):
+            return
+        url = str(flow.get("url") or "")
+        if self._looks_like_js_flow({"url": url, "response_headers": {}, "response_body": ""}):
+            # 仅凭 URL 判断（.js）；响应阶段再写入 scripts
+            return
+        flow = dict(flow)
+        flow["source"] = flow.get("source") or "web-proxy"
+        self._ingest_flow(
+            flow,
+            show_in_browser_list=True,
+            list_prefix=str(flow.get("_list_prefix") or "[抓包] "),
+        )
+
+    def _on_web_capture_flow_updated(self, flow: dict):
+        if not isinstance(flow, dict):
+            return
+        from core.flow_format import is_pending_response_body
+
+        flow = dict(flow)
+        flow["source"] = flow.get("source") or "web-proxy"
+        key = str(flow.get("_key") or flow.get("key") or "")
+        already_in_list = bool(key and key in self._flow_keys)
+
+        if self._looks_like_js_flow(flow):
+            body = str(flow.get("response_body") or "")
+            if body and not is_pending_response_body(body) and not body.startswith("(binary)"):
+                self._on_script({"url": str(flow.get("url") or ""), "content": body})
+                self._log(f"抓包 JS: {(flow.get('url') or '')[:80]}")
+            # 请求阶段已进流量列表时，必须合并响应，避免一直停在 pending
+            if already_in_list:
+                self._update_ingested_flow(flow, update_browser_list=True)
+            return
+        self._update_ingested_flow(flow, update_browser_list=True)
 
     def load_miniprogram_scripts(self, scripts: dict[str, str], meta: dict | None = None) -> None:
         """由「小程序」子页注入反编译 JS，供本页右侧 AI 分析."""
@@ -2037,6 +3601,27 @@ class AILabTab(QWidget):
         )
         self._sync_action_buttons()
 
+    def _refresh_capture_tab_labels(self) -> None:
+        tabs = getattr(self, "browser_capture_tabs", None)
+        if tabs is None:
+            return
+        n_flow = len(self._flows)
+        n_hook = len(self._hooks)
+        n_js = len(self._scripts)
+        # 过滤时显示「可见/总数」
+        visible_js = self.js_list.count() if hasattr(self, "js_list") else n_js
+        js_label = f"JS({n_js})"
+        if self._js_filter_query() and visible_js != n_js:
+            js_label = f"JS({visible_js}/{n_js})"
+        labels = {
+            0: f"流量({n_flow})",
+            1: f"Hook({n_hook})" if n_hook else "Hook",
+            2: js_label,
+        }
+        for i, text in labels.items():
+            if i < tabs.count():
+                tabs.setTabText(i, text)
+
     def _refresh_capture_stats(self):
         n_flow = len(self._flows)
         n_hook = len(self._hooks)
@@ -2045,13 +3630,19 @@ class AILabTab(QWidget):
             self.chip_flow.set_count(n_flow)
             self.chip_hook.set_count(n_hook)
             self.chip_js.set_count(n_js)
+        self._refresh_capture_tab_labels()
+        self._update_flow_empty_hint()
         self._update_next_hint()
 
     def _set_hint(self, text: str, *, kind: str = "info"):
-        """更新右侧引导；单行淡字，不占大块."""
+        """更新目标 URL 下方引导；空文案时隐藏。"""
         if not hasattr(self, "next_hint"):
             return
+        text = (text or "").strip()
         self.next_hint.setText(text)
+        self.next_hint.setVisible(bool(text))
+        if not text:
+            return
         colors = {
             "empty": C.get("text_dim", "#7a7c80"),
             "warn": C.get("warn", "#b89a5a"),
@@ -2063,7 +3654,7 @@ class AILabTab(QWidget):
         fg = colors.get(kind, C.get("text_dim", "#7a7c80"))
         self.next_hint.setStyleSheet(
             f"QLabel#aiNextHint {{ background:transparent; color:{fg};"
-            f" border:none; padding:0; font-size:11px; }}"
+            f" border:none; padding:2px 2px 0 2px; font-size:11px; }}"
         )
 
     def _update_next_hint(self):
@@ -2100,18 +3691,12 @@ class AILabTab(QWidget):
             extra = "" if api_ok else " · 先配置 API"
             self._set_hint(f"已采集 {'/'.join(parts)} → Agent 识别或生成{extra}", kind="ready" if api_ok else "warn")
         else:
-            self._set_hint("左侧采集后，到 Agent 识别或生成", kind="empty")
+            self._set_hint("", kind="empty")
         self._sync_action_buttons()
 
     def _update_flow_empty_hint(self):
-        if self._flows:
-            self.flow_empty_hint.hide()
-            return
-        self.flow_empty_hint.show()
-        if self.stop_btn.isEnabled():
-            self.flow_empty_hint.setText("等待流量…在页面里登录或点几下触发请求即可。")
-        else:
-            self.flow_empty_hint.setText("填 URL → 启动 → 在页面操作产生流量")
+        """兼容旧调用；空状态提示已移除。"""
+        return
 
     @staticmethod
     def _format_headers_text(hdrs: dict | None) -> str:
@@ -2166,8 +3751,12 @@ class AILabTab(QWidget):
             self.result_tabs.setCurrentWidget(self.flow_detail_tabs)
             tip = getattr(self, "flow_detail_tabs", None)
             if tip is not None:
+                # 从 JS「索引/源码」切回流量时恢复 Tab 名
+                tip.setTabText(0, "请求")
+                tip.setTabText(1, "响应")
                 tip.setTabToolTip(0, meta)
                 tip.setTabToolTip(1, f"HTTP {f.get('status') or '-'}")
+                tip.setCurrentIndex(0)
 
     def _on_flow_selected(self, item: QListWidgetItem):
         """单击：仅在详情里展示请求/响应，不跳解析器."""
@@ -2183,17 +3772,31 @@ class AILabTab(QWidget):
         except Exception as e:
             self._log(f"显示流量详情失败: {e}")
 
-    def _on_flow_double_clicked(self, item: QListWidgetItem):
-        """双击：加载到请求解析器."""
+    def _flow_from_list_item(self, item: QListWidgetItem | None) -> dict | None:
+        if item is None:
+            return None
+        idx = item.data(Qt.ItemDataRole.UserRole)
+        if idx is None:
+            idx = self.flow_list.row(item)
+        if not isinstance(idx, int) or idx < 0 or idx >= len(self._flows):
+            return None
+        return self._flows[idx]
+
+    def _on_flow_context_menu(self, pos) -> None:
+        """右键：转解析器."""
+        item = self.flow_list.itemAt(pos)
         if item is None:
             return
+        self.flow_list.setCurrentItem(item)
+        menu = QMenu(self.flow_list)
+        act = menu.addAction("转解析器")
+        chosen = menu.exec(self.flow_list.mapToGlobal(pos))
+        if chosen is not act:
+            return
         try:
-            idx = item.data(Qt.ItemDataRole.UserRole)
-            if idx is None:
-                idx = self.flow_list.row(item)
-            if not isinstance(idx, int) or idx < 0 or idx >= len(self._flows):
+            f = self._flow_from_list_item(item)
+            if f is None:
                 return
-            f = self._flows[idx]
             self._show_flow_detail(f, switch_result_tab=False)
             self._push_flow_to_parser(f, switch_tab=True)
         except Exception as e:
@@ -2221,6 +3824,16 @@ class AILabTab(QWidget):
         """小程序页流量列表点选 → 右侧详情."""
         clean = self._clean_flow(flow)
         self._show_flow_detail(clean, switch_result_tab=True)
+
+    def _on_script_preview(self, label: str, content: str) -> None:
+        """小程序 / App 候选代码点选 → 右侧详情（与网页 JS 列表一致）."""
+        body = content or ""
+        if len(body) > 8000:
+            body = body[:8000] + "\n…(截断)"
+        title = (label or "").strip() or "script"
+        self._show_detail_text(f"// {title}\n\n{body}", "")
+        if hasattr(self, "flow_detail_tabs"):
+            self.result_tabs.setCurrentWidget(self.flow_detail_tabs)
 
     def _clear_session_capture(self):
         """关闭浏览器时清空本次捕获数据（保留 AI 分析结果与已生成脚本）."""
@@ -2251,6 +3864,7 @@ class AILabTab(QWidget):
         self.followup_edit.clear()
 
     def _clear_capture(self):
+        """清空左侧采集 + 右侧 Agent/结果/插件等 AI 输出。"""
         self._clear_session_capture()
         self._last_result = None
         self._last_plugin_code = ""
@@ -2258,47 +3872,61 @@ class AILabTab(QWidget):
         if hasattr(self, "code_loc_view"):
             self.code_loc_view.clear()
         self.plugin_view.clear()
+        if hasattr(self, "agent_view"):
+            self.agent_view.clear()
+        self._clear_ai_context_views()
         self._show_detail_text("", "")
         self._reset_chat()
         if self._analysis_worker and self._analysis_worker.isRunning():
             self._analysis_worker.requestInterruption()
+        self._set_hint("已清空采集与 AI 输出", kind="ok")
+        QTimer.singleShot(1800, self._update_next_hint)
 
     def _set_analysis_buttons_enabled(self, enabled: bool):
         self._busy = not enabled
-        anti_btn = getattr(self, "anti_debug_agent_btn", None)
+        tool_actions = (
+            getattr(self, "_act_hook_analyze", None),
+            getattr(self, "_act_verify_crypto", None),
+            getattr(self, "_act_anti_debug", None),
+            getattr(self, "_act_fingerprint_hook", None),
+            getattr(self, "_act_bot_bypass_agent", None),
+            getattr(self, "_act_js_reverse", None),
+            getattr(self, "_act_js_deobfuscate", None),
+        )
+        tools_btn = getattr(self, "_agent_tools_btn", None)
         if not enabled:
             self.recognize_btn.setText("识别中…")
             self.gen_decrypt_btn.setText("分析中…")
-            self.gen_encrypt_btn.setText("分析中…")
             self.recognize_btn.setEnabled(False)
             self.gen_decrypt_btn.setEnabled(False)
             self.gen_encrypt_btn.setEnabled(False)
-            if anti_btn is not None:
-                anti_btn.setEnabled(False)
-                anti_btn.setText("分析中…")
-            self._act_hook_analyze.setEnabled(False)
+            for act in tool_actions:
+                if act is not None:
+                    act.setEnabled(False)
+            if tools_btn is not None:
+                tools_btn.setEnabled(False)
             self.agent_send_btn.setEnabled(False)
             self._set_hint("Agent 分析中…", kind="busy")
         else:
             self.recognize_btn.setText(self._btn_labels["recognize"])
-            self.gen_decrypt_btn.setText(self._btn_labels["decrypt"])
-            self.gen_encrypt_btn.setText(self._btn_labels["encrypt"])
-            set_btn_icon(self.recognize_btn, "code", size=14)
-            set_btn_icon(self.gen_decrypt_btn, "decrypt", size=14)
-            set_btn_icon(self.gen_encrypt_btn, "encrypt", size=14)
-            if anti_btn is not None:
-                anti_btn.setEnabled(True)
-                anti_btn.setText(self._btn_labels["anti_debug"])
-                set_btn_icon(anti_btn, "search", size=14)
-            self._act_hook_analyze.setEnabled(True)
+            self.gen_decrypt_btn.setText(self._btn_labels["analyze"])
+            set_btn_icon(self.recognize_btn, "search", size=14)
+            set_btn_icon(self.gen_decrypt_btn, "ai", size=14)
+            for act in tool_actions:
+                if act is not None:
+                    act.setEnabled(True)
+            if tools_btn is not None:
+                tools_btn.setEnabled(True)
             self.agent_send_btn.setEnabled(True)
             self._sync_action_buttons()
             self._update_next_hint()
 
-    def _run_analyze_and_generate(self, role: str):
-        """一键：Agent 分析并生成 plugin.py."""
-        if not self._prompt_field_targets(role=role):
+    def _run_analyze_and_generate(self, role: str | None = None):
+        """一键：弹出字段选择（点亮解密/加密）→ Agent 分析并生成 plugin.py."""
+        picked = self._prompt_field_targets(role=role)
+        if not picked:
             return
+        role = "encrypt" if picked == "encrypt" else "decrypt"
         goal = GENERATE_DECRYPT_GOAL if role == "decrypt" else GENERATE_ENCRYPT_GOAL
         goal = self._goal_with_field_targets(goal)
         self._set_agent_dialog_mode("chat")
@@ -2539,12 +4167,9 @@ class AILabTab(QWidget):
         try:
             from core.browser_ext_manager import export_hooks_to_userscript
 
-            if hasattr(self, "_act_cb_hook"):
-                self._act_cb_hook.setChecked(True)
+            self._enable_hook_injection_channels(enable_vm=True)
             if hasattr(self, "_act_hook"):
                 self._act_hook.setChecked(True)
-            if hasattr(self, "userscript_enable_check"):
-                self.userscript_enable_check.setChecked(True)
             self._save_config()
             paths = export_hooks_to_userscript(
                 include_anti_debug=self._act_anti.isChecked() if hasattr(self, "_act_anti") else False,
@@ -2558,25 +4183,271 @@ class AILabTab(QWidget):
                 self._refresh_userscript_preview()
             self._focus_userscript_tab()
             self._set_hint(
-                "Bypass Hook 已写入 → 重启浏览器复测，Burp 看明文，再「生成加密」",
-                kind="ok",
+                "Bypass Hook 已写入 → 正在自动重启浏览器复测…",
+                kind="busy",
             )
             tip = (
                 f"已保存:\n{paths['userscript']}\n\n"
-                "1. 重新「启动」浏览器（油猴若弹出请安装）\n"
-                "2. 控制台应出现 [密桥·BypassHook] runtime ready / hooked …\n"
-                "3. 复测后 Burp 目标字段应为明文\n"
-                "4. 再点「生成加密」重算出站\n"
+                "将自动开启暴力猴并重启浏览器；若油猴弹出请点「确认安装」。\n"
+                "控制台应出现 [密桥·BypassHook] runtime ready / hooked …\n"
+                "复测后 Burp 目标字段应为明文，再点「生成加密」。"
             )
             if advice:
                 tip += f"\n\n{advice}"
             QMessageBox.information(self, "Bypass Hook 已写入", tip)
-            if hasattr(self, "_prompt_reopen_browser"):
-                self._prompt_reopen_browser("Bypass Hook 已写入油猴与密桥 Hook 扩展。")
+            self._prompt_reopen_browser("Bypass Hook 已写入油猴与密桥 Hook 扩展。")
         except Exception as e:
             QMessageBox.critical(self, "写入失败", str(e))
             self._log(f"写入 Bypass Hook 失败: {e}")
 
+
+    def _verify_crypto_now(self) -> None:
+        """手动点「验证加解密」。"""
+        steps = (self._last_result or {}).get("steps") or []
+        if not steps:
+            # 尝试从主窗口共享管道取
+            try:
+                import gui as gui_mod
+
+                steps = list(gui_mod.shared_pipeline.steps or [])
+            except Exception:
+                steps = []
+        if not steps:
+            QMessageBox.information(self, "验证", "请先识别/生成加解密步骤")
+            return
+        role = self._pending_generate_role or self._analysis_role or "decrypt"
+        code = self._last_plugin_code or self.plugin_view.toPlainText()
+        self._run_crypto_verify(
+            steps=steps,
+            role=role,
+            plugin_code=code if "def request(" in (code or "") else None,
+            sample_flow=None,
+            auto=False,
+        )
+
+    def _run_crypto_verify(
+        self,
+        *,
+        steps: list,
+        role: str,
+        plugin_code: str | None,
+        sample_flow: dict | None,
+        auto: bool = False,
+        pre_write: bool = False,
+        attempt: int = 1,
+        max_attempts: int = 5,
+    ):
+        """对采样流量做字段验证 + 插件干跑。
+
+        先静默跑完测试，再弹结果告诉用户。
+        pre_write=True：返回 \"ok\"|\"force\"|\"retry\"|\"cancel\"；
+        其它模式返回 bool（兼容旧调用）。
+        """
+        from PyQt6.QtWidgets import QApplication
+        from core.ai_project_writer import pick_sample_flow
+        from core.crypto_verify import verify_crypto
+        from core.crypto_verify_dialog import show_verify_dialog
+
+        sample = sample_flow or self._selected_flow() or pick_sample_flow(self._flows, steps)
+        if not sample:
+            self._log("无采样流量，无法自动验证")
+            if pre_write:
+                QMessageBox.warning(
+                    self,
+                    "无法自动验证",
+                    "没有可用的采样流量，无法验证加解密是否正确。\n"
+                    "请先在「网页」采集并勾选一条相关请求后再生成。",
+                )
+                return "cancel"
+            if not auto:
+                QMessageBox.information(
+                    self,
+                    "验证",
+                    "没有可用的采样流量。请先在「网页」采集请求，或勾选一条流量后再验证。",
+                )
+            return True
+
+        self._log(f"正在自动验证加解密…（第 {attempt}/{max_attempts} 次）")
+        self._set_hint(
+            f"正在自动验证加解密（第 {attempt}/{max_attempts} 次）…",
+            kind="busy",
+        )
+        QApplication.processEvents()
+
+        try:
+            report = verify_crypto(
+                steps,
+                sample,
+                role=role or "decrypt",
+                plugin_code=plugin_code,
+            )
+        except Exception as e:
+            self._log(f"验证失败: {e}")
+            self._set_hint(f"验证出错: {e}", kind="warn")
+            if pre_write:
+                QMessageBox.warning(self, "验证出错", f"自动验证失败：\n{e}")
+                return "cancel"
+            if not auto:
+                QMessageBox.warning(self, "验证失败", str(e))
+            return False
+
+        self._log(report.summary)
+        if report.request.fields:
+            for f in report.request.fields:
+                mark = "OK" if f.ok else "FAIL"
+                self._log(f"  [请求.{f.field}] {mark} — {f.message}")
+        if report.response.fields:
+            for f in report.response.fields:
+                mark = "OK" if f.ok else "FAIL"
+                self._log(f"  [响应.{f.field}] {mark} — {f.message}")
+
+        action = show_verify_dialog(
+            self,
+            report,
+            pre_write=pre_write,
+            attempt=attempt,
+            max_attempts=max_attempts,
+        )
+        if pre_write:
+            # 把报告挂到实例上，供重试时拼反馈
+            self._last_verify_report = report
+            if action == "ok":
+                self._set_hint("验证通过，可继续生成项目", kind="ok")
+            elif action == "force":
+                self._set_hint("已确认仍要继续生成…", kind="warn")
+            elif action == "retry":
+                self._set_hint("将把失败请求/响应回传 AI 修正…", kind="busy")
+            else:
+                self._log("用户取消（验证后未继续生成）")
+                self._set_hint(
+                    "验证未通过，已取消生成" if not report.overall_ok else "已取消生成",
+                    kind="warn",
+                )
+            return action
+        if auto:
+            self._set_hint(report.summary, kind="ok" if report.overall_ok else "warn")
+        return True
+
+    def _verify_steps_with_ai_retry(
+        self,
+        *,
+        steps: list,
+        role: str,
+        sample_flow: dict | None,
+        body_format: str,
+        preview_name: str,
+        match_rules: dict | None,
+        max_attempts: int = 5,
+    ) -> tuple[bool, list]:
+        """验证 → 失败弹窗 → AI 根据失败报文修正，最多 max_attempts 次。
+
+        返回 (是否继续写入, 最终 steps)。
+        """
+        from PyQt6.QtWidgets import QApplication
+        from codegen import generate_code_from_steps
+        from core.ai_analyzer import revise_steps_after_verify_failure
+        from core.crypto_verify import format_verify_feedback
+        from core.ai_project_writer import enrich_decrypt_input_fmt
+
+        max_attempts = max(1, min(int(max_attempts or 5), 5))
+        cur_steps = enrich_decrypt_input_fmt(list(steps or []), self._flows)
+        code_role = role if role in ("encrypt", "decrypt") else "decrypt"
+
+        for attempt in range(1, max_attempts + 1):
+            preview_code = generate_code_from_steps(
+                cur_steps,
+                body_format,
+                role=code_role,
+                profile_name=preview_name,
+                match_rules=match_rules,
+            )
+            action = self._run_crypto_verify(
+                steps=cur_steps,
+                role=code_role,
+                plugin_code=preview_code,
+                sample_flow=sample_flow,
+                auto=True,
+                pre_write=True,
+                attempt=attempt,
+                max_attempts=max_attempts,
+            )
+            last_report = getattr(self, "_last_verify_report", None)
+            report_failed = bool(last_report is not None and not last_report.overall_ok)
+            if action in ("ok", "force"):
+                return True, cur_steps
+            if action != "retry":
+                if action == "cancel" and attempt >= max_attempts and report_failed:
+                    QMessageBox.warning(
+                        self,
+                        "判断不出来",
+                        f"已连续自动验证 {max_attempts} 次仍未通过，停止判断。\n"
+                        "请检查 Hook 密钥、算法模式，或手动在可视化构建器调整后再验证。",
+                    )
+                    self._set_hint(
+                        f"已重试 {max_attempts} 次仍未通过，判断不出来",
+                        kind="warn",
+                    )
+                return False, cur_steps
+
+            # AI 根据失败请求/响应修正
+            report = last_report
+            if report is None:
+                self._log("无验证报告，无法重试")
+                return False, cur_steps
+            cfg = self._get_ai_cfg()
+            if not cfg:
+                return False, cur_steps
+
+            feedback = format_verify_feedback(report)
+            self._log(f"验证未通过，回传 AI 修正（第 {attempt}/{max_attempts}）…")
+            self._set_hint(
+                f"AI 正在根据失败报文修正步骤（{attempt}/{max_attempts}）…",
+                kind="busy",
+            )
+            QApplication.processEvents()
+            try:
+                revised = revise_steps_after_verify_failure(
+                    cfg=cfg,
+                    role=code_role,
+                    previous_result=dict(self._last_result or {}, steps=cur_steps),
+                    verify_feedback=feedback,
+                    attempt=attempt,
+                    max_attempts=max_attempts,
+                    hook_lines=list(self._hooks or []),
+                    sample_flow=sample_flow,
+                )
+            except Exception as e:
+                self._log(f"AI 修正失败: {e}")
+                QMessageBox.warning(self, "AI 修正失败", str(e))
+                return False, cur_steps
+
+            new_steps = revised.get("steps") or []
+            if not new_steps:
+                self._log("AI 修正后仍无有效 steps")
+                if attempt >= max_attempts:
+                    break
+                continue
+
+            cur_steps = enrich_decrypt_input_fmt(list(new_steps), self._flows)
+            # 合并回 _last_result，便于后续写入
+            merged = dict(self._last_result or {})
+            merged.update({k: v for k, v in revised.items() if k != "_revise_raw"})
+            merged["steps"] = cur_steps
+            self._last_result = merged
+            try:
+                self._show_result_json(merged, replace=True)
+            except Exception:
+                pass
+            self._log(f"AI 已修正为 {len(cur_steps)} 个步骤，重新验证…")
+
+        QMessageBox.warning(
+            self,
+            "判断不出来",
+            f"已连续自动验证 {max_attempts} 次仍未通过，停止判断。\n"
+            "请检查 Hook 密钥、算法模式，或手动在可视化构建器调整后再验证。",
+        )
+        self._set_hint(f"已重试 {max_attempts} 次仍未通过，判断不出来", kind="warn")
+        return False, cur_steps
 
     def _generate_plugin(self, *, silent: bool = False, code_role: str | None = None) -> bool:
         if not self._last_result or not self._last_result.get("steps"):
@@ -2584,81 +4455,101 @@ class AILabTab(QWidget):
                 QMessageBox.information(self, "提示", "请先运行 AI 分析并得到有效步骤")
             return False
 
-        role = code_role or self._pending_generate_role or self._analysis_role or "decrypt"
-        if role == "decrypt" and not silent:
-            action = self._confirm_irreversible_for_decrypt(self._last_result["steps"])
-            if action == "cancel":
-                return False
-            if action == "hook":
-                self._run_hash_plain_hook_agent(self._last_result["steps"])
-                return False
-
-        opts = self._ask_project_options(role)
-        if not opts:
-            return False
-
-        steps = self._pick_steps_dialog(
-            self._last_result["steps"],
-            title="选择要写入项目的步骤",
+        from PyQt6.QtWidgets import QApplication
+        from core.ai_project_writer import (
+            enrich_decrypt_input_fmt,
+            guess_match_rules,
+            pick_sample_flow,
         )
-        if steps is None:
+        from codegen import generate_code_from_steps
+
+        role = code_role or self._pending_generate_role or self._analysis_role or "decrypt"
+        code_role = role if role in ("encrypt", "decrypt") else "decrypt"
+        summary = self._last_result.get("summary", "")
+        body_format = detect_body_format(self._flows)
+
+        # —— 立刻用全部步骤自动验证；失败则把错误请求/响应回传 AI，最多 5 次 ——
+        steps = enrich_decrypt_input_fmt(list(self._last_result["steps"]), self._flows)
+        preview_name = guess_project_name(self.url_edit.text().strip(), self._flows)
+        match_rules = guess_match_rules(self._flows, self.url_edit.text().strip())
+        sample_flow = pick_sample_flow(
+            self._flows, steps, preferred=self._selected_flow()
+        )
+
+        self._log("AI 步骤已就绪，开始自动验证加解密…")
+        self._set_hint("正在自动验证加解密…", kind="busy")
+        QApplication.processEvents()
+
+        ok, steps = self._verify_steps_with_ai_retry(
+            steps=steps,
+            role=code_role,
+            sample_flow=sample_flow,
+            body_format=body_format,
+            preview_name=preview_name,
+            match_rules=match_rules,
+            max_attempts=5,
+        )
+        if not ok:
+            if code_role == "decrypt" and not silent:
+                info = classify_steps_reversibility(steps)
+                if info.get("has_irreversible"):
+                    action = self._confirm_irreversible_for_decrypt(steps)
+                    if action == "hook":
+                        self._run_hash_plain_hook_agent(steps)
             return False
 
-        # 用户可能去掉了可逆步骤，只留下哈希/签名，再确认一次
-        if role == "decrypt" and not silent:
-            before = classify_steps_reversibility(self._last_result["steps"])
-            after = classify_steps_reversibility(steps)
-            if after.get("has_irreversible") and (
-                after.get("hash_only") and not before.get("hash_only")
-            ):
-                action = self._confirm_irreversible_for_decrypt(steps)
-                if action == "cancel":
-                    return False
-                if action == "hook":
-                    self._run_hash_plain_hook_agent(steps)
-                    return False
-
-        body_format = detect_body_format(self._flows)
-        summary = self._last_result.get("summary", "")
-        confidence = self._last_result.get("confidence", "")
-
-        if confidence == "low" and not silent:
-            reply = QMessageBox.question(
-                self,
-                "置信度较低",
-                f"AI 分析置信度为 low：\n{summary}\n\n仍要写入选中的 {len(steps)} 个步骤吗？",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        # 验证通过（或用户确认仍继续）后再选步骤 / 填项目名
+        if len(steps) > 1 and not silent:
+            picked = self._pick_steps_dialog(
+                steps,
+                title="验证已完成 — 选择要写入的步骤",
             )
-            if reply != QMessageBox.StandardButton.Yes:
+            if picked is None:
                 return False
+            steps = enrich_decrypt_input_fmt(list(picked), self._flows)
+
+        opts = None if silent else self._ask_project_options(code_role)
+        if not silent and not opts:
+            return False
+        if silent:
+            opts = {
+                "name": preview_name,
+                "roles": [code_role],
+                "match": match_rules,
+                "code_role": code_role,
+            }
 
         profile_path = os.path.join(PROFILES_DIR, f"{opts['name']}.yaml")
         overwrite = False
         if os.path.exists(profile_path):
-            reply = QMessageBox.question(
-                self,
-                "项目已存在",
-                f"项目 '{opts['name']}' 已存在，是否覆盖？\n"
-                f"（将写入勾选的 {len(steps)} 个步骤）",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            )
-            if reply != QMessageBox.StandardButton.Yes:
-                return False
-            overwrite = True
+            if silent:
+                overwrite = True
+            else:
+                reply = QMessageBox.question(
+                    self,
+                    "项目已存在",
+                    f"项目 '{opts['name']}' 已存在，是否覆盖？\n"
+                    f"（将写入 {len(steps)} 个步骤）",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    return False
+                overwrite = True
 
+        match_rules = opts.get("match") or match_rules
         try:
             name, code, sample_flow = save_ai_project(
                 opts["name"],
                 steps,
                 roles=opts["roles"],
                 code_role=opts.get("code_role"),
-                match=opts["match"],
+                match=match_rules,
                 body_format=body_format,
                 description=summary,
                 flows=self._flows,
                 fallback_url=self.url_edit.text().strip(),
                 overwrite=overwrite,
-                sample_flow=self._selected_flow(),
+                sample_flow=sample_flow or self._selected_flow(),
             )
         except Exception as e:
             if not silent:
@@ -2673,8 +4564,7 @@ class AILabTab(QWidget):
         self._sync_to_main_window(name, steps, code, body_format, sample_flow=sample_flow)
         type_label = "加密" if opts.get("code_role") == "encrypt" else "解密"
         self._set_hint(
-            f"已生成{type_label}脚本 plugins/{name}/plugin.py（{len(steps)} 步），"
-            f"报文已同步到请求解析器；控制面板已切到「{name}」。",
+            f"验证通过并已生成{type_label}脚本 plugins/{name}/plugin.py（{len(steps)} 步）",
             kind="ok",
         )
         return True
@@ -2872,6 +4762,384 @@ class AILabTab(QWidget):
         self._set_agent_dialog_mode("anti_debug")
         self._start_agent_task(ANTI_DEBUG_GOAL, mode="anti_debug")
 
+    def _run_fingerprint_hook_analyze(self):
+        """AI 分析指纹采集并生成可注入 hook_js。"""
+        if not self._ensure_stealth_mode_for_bypass(ask=True):
+            return
+        if not self._scripts and not self._flows and not self._hooks:
+            QMessageBox.information(
+                self,
+                "提示",
+                "请先启动浏览器打开目标站并采集流量 / JS，再点「指纹绕过 HOOK」。\n"
+                "也可在左侧「JS」列表勾选要分析的脚本。\n\n"
+                "流程：普通模式启动 → 采 JS → 本功能生成站点补丁 → 重启再测。",
+            )
+            return
+        if not self._get_ai_cfg():
+            return
+        n = len(self._scripts)
+        self._set_hint(
+            f"正在用 AI 分析指纹采集（{n} 个 JS）…结果见 Agent 页",
+            kind="busy",
+        )
+        self._set_agent_dialog_mode("fingerprint_hook")
+        self._start_agent_task(FINGERPRINT_HOOK_GOAL, mode="fingerprint_hook")
+
+    def _handle_fingerprint_hook_agent_result(self, text: str) -> None:
+        """解析 fingerprint_hook JSON：展示结果并询问是否应用 hook_js / browser_opts。"""
+        parsed = None
+        try:
+            parsed = _extract_json(text)
+        except Exception:
+            parsed = None
+        if not isinstance(parsed, dict):
+            self.result_view.setPlainText(text)
+            self._log("指纹绕过 HOOK 完成（未解析到 JSON，见 Agent 原文）")
+            self._set_hint("指纹分析完成，请看 Agent 原文", kind="ready")
+            return
+
+        try:
+            self.result_view.setPlainText(json.dumps(parsed, ensure_ascii=False, indent=2))
+        except Exception:
+            self.result_view.setPlainText(text)
+
+        summary = str(parsed.get("summary") or "").strip()
+        advice = str(parsed.get("advice") or "").strip()
+        patterns = parsed.get("patterns") or []
+        detections = (
+            parsed.get("detections") if isinstance(parsed.get("detections"), list) else []
+        )
+        opts = parsed.get("browser_opts") if isinstance(parsed.get("browser_opts"), dict) else {}
+        hook_js = str(parsed.get("hook_js") or "").strip()
+        self._log(
+            "指纹绕过 HOOK: "
+            + (summary[:120] if summary else "完成")
+            + (f" | 模式: {', '.join(map(str, patterns[:5]))}" if patterns else "")
+            + (f" | 探测点 {len(detections)}" if detections else "")
+            + (" | 含 hook_js" if hook_js else "")
+        )
+        self._set_hint(
+            advice[:200] if advice else (summary[:200] or "指纹分析完成"),
+            kind="ready",
+        )
+
+        if not opts and not hook_js:
+            QMessageBox.information(
+                self,
+                "未得到 Hook",
+                "AI 未返回 hook_js / browser_opts。请到 Agent 页查看原文，或再试一次。",
+            )
+            return
+
+        lines = [summary] if summary else []
+        if patterns:
+            lines.append("识别到: " + ", ".join(str(p) for p in patterns[:8]))
+        if detections:
+            bits = []
+            for d in detections[:5]:
+                if not isinstance(d, dict):
+                    continue
+                bits.append(
+                    f"{d.get('api') or d.get('what') or '?'} @ "
+                    f"{d.get('url') or '?'} L{d.get('approx_line') or '?'}"
+                )
+            if bits:
+                lines.append("探测点: " + " | ".join(bits))
+        if advice:
+            lines.append(advice)
+        lines.append(
+            "\n是否应用？将：关闭「真实浏览器」+ 开启暴力猴/Hook + 写入站点指纹补丁"
+            "，并自动重启浏览器生效"
+        )
+        if self._ask_scroll_confirm("应用指纹绕过方案？", "\n".join(lines)):
+            self.apply_bot_bypass_result(parsed, parent=self)
+
+    def _run_js_reverse_analyze(self):
+        """AI JS 逆向：定位加解密/签名业务入口与字段。"""
+        if not self._scripts and not self._hooks:
+            QMessageBox.information(
+                self,
+                "提示",
+                "请先启动浏览器并操作页面，采到 JS 后再点「JS逆向」。\n"
+                "也可在左侧「JS」列表勾选要分析的脚本。",
+            )
+            return
+        n = len(self._scripts)
+        self._set_hint(
+            f"正在用 AI 逆向分析 {n} 个 JS…结果见 Agent / 源码位置",
+            kind="busy",
+        )
+        self._set_agent_dialog_mode("js_reverse")
+        self._start_agent_task(JS_REVERSE_GOAL, mode="js_reverse")
+
+    def _run_js_deobfuscate_analyze(self):
+        """AI JS 解混淆：还原加解密相关可读片段。"""
+        if not self._scripts and not self._hooks:
+            QMessageBox.information(
+                self,
+                "提示",
+                "请先启动浏览器并操作页面，采到 JS 后再点「JS解密」。\n"
+                "也可在左侧「JS」列表勾选要分析的脚本。",
+            )
+            return
+        n = len(self._scripts)
+        self._set_hint(
+            f"正在用 AI 解混淆 {n} 个 JS…结果见 Agent / 结果页",
+            kind="busy",
+        )
+        self._set_agent_dialog_mode("js_deobfuscate")
+        self._start_agent_task(JS_DEOBFUSCATE_GOAL, mode="js_deobfuscate")
+
+    def _handle_js_reverse_agent_result(self, text: str) -> None:
+        """解析 js_reverse JSON：展示 findings / code_locations。"""
+        parsed = None
+        try:
+            parsed = _extract_json(text)
+        except Exception:
+            parsed = None
+        if not isinstance(parsed, dict):
+            self.result_view.setPlainText(text)
+            self._log("JS逆向完成（未解析到 JSON，见 Agent 原文）")
+            self._set_hint("JS逆向完成，请看 Agent 原文", kind="ready")
+            return
+
+        self._show_result_json(parsed)
+        summary = str(parsed.get("summary") or "").strip()
+        advice = str(parsed.get("advice") or "").strip()
+        findings = parsed.get("findings") if isinstance(parsed.get("findings"), list) else []
+        locs = parsed.get("code_locations") if isinstance(parsed.get("code_locations"), list) else []
+        conf = str(parsed.get("confidence") or "").strip()
+        self._log(
+            "JS逆向: "
+            + (summary[:120] if summary else "完成")
+            + (f" | 置信度 {conf}" if conf else "")
+            + (f" | findings {len(findings)}" if findings else "")
+            + (f" | 源码位置 {len(locs)}" if locs else "")
+        )
+        hint = advice[:200] if advice else (summary[:200] or "JS逆向完成")
+        self._set_hint(hint, kind="ready")
+        if locs and hasattr(self, "result_tabs"):
+            try:
+                idx = self.result_tabs.indexOf(self.code_loc_view)
+                if idx >= 0:
+                    self.result_tabs.setCurrentIndex(idx)
+            except Exception:
+                pass
+
+    def _handle_js_deobfuscate_agent_result(self, text: str) -> None:
+        """解析 js_deobfuscate JSON：展示 snippets，可选保存还原 JS。"""
+        parsed = None
+        try:
+            parsed = _extract_json(text)
+        except Exception:
+            parsed = None
+        if not isinstance(parsed, dict):
+            self.result_view.setPlainText(text)
+            self._log("JS解密完成（未解析到 JSON，见 Agent 原文）")
+            self._set_hint("JS解密完成，请看 Agent 原文", kind="ready")
+            return
+
+        self._show_result_json(parsed)
+        summary = str(parsed.get("summary") or "").strip()
+        advice = str(parsed.get("advice") or "").strip()
+        techniques = parsed.get("techniques") if isinstance(parsed.get("techniques"), list) else []
+        snippets = parsed.get("snippets") if isinstance(parsed.get("snippets"), list) else []
+        deob = str(parsed.get("deobfuscated_js") or "").strip()
+        conf = str(parsed.get("confidence") or "").strip()
+        self._log(
+            "JS解密: "
+            + (summary[:120] if summary else "完成")
+            + (f" | 置信度 {conf}" if conf else "")
+            + (f" | 手法: {', '.join(map(str, techniques[:5]))}" if techniques else "")
+            + (f" | snippets {len(snippets)}" if snippets else "")
+        )
+        hint = advice[:200] if advice else (summary[:200] or "JS解密完成")
+        self._set_hint(hint, kind="ready")
+
+        if not deob and not snippets:
+            return
+        # 把可读片段也拼到结果页下方，方便复制
+        parts = []
+        if deob:
+            parts.append("// ===== deobfuscated_js =====\n" + deob)
+        for i, sn in enumerate(snippets[:8]):
+            if not isinstance(sn, dict):
+                continue
+            title = str(sn.get("title") or f"snippet_{i+1}").strip()
+            code = str(sn.get("code") or "").strip()
+            if code:
+                parts.append(f"// ===== {title} =====\n{code}")
+        if parts:
+            try:
+                base = json.dumps(parsed, ensure_ascii=False, indent=2)
+            except Exception:
+                base = text
+            self.result_view.setPlainText(base + "\n\n" + "\n\n".join(parts))
+
+        if deob:
+            reply = QMessageBox.question(
+                self,
+                "保存还原 JS？",
+                (summary[:160] + "\n\n" if summary else "")
+                + "是否将 deobfuscated_js 保存为本地 .js 文件？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self._save_deobfuscated_js(deob)
+
+    def _save_deobfuscated_js(self, content: str) -> None:
+        from PyQt6.QtWidgets import QFileDialog
+
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "保存还原 JS",
+            "deobfuscated.js",
+            "JavaScript (*.js);;All Files (*)",
+        )
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
+            self._log(f"已保存还原 JS: {path}")
+            self._set_hint(f"已保存: {path}", kind="ready")
+        except Exception as e:
+            QMessageBox.warning(self, "保存失败", str(e))
+
+    def _run_bot_bypass_analyze(self):
+        """打开独立「浏览器绕过 Agent」窗口（实时通关）。"""
+        if not self._ensure_stealth_mode_for_bypass(ask=True):
+            return
+        if not self._get_ai_cfg():
+            return
+        from core.bot_bypass_dialog import open_bot_bypass_dialog
+
+        self._set_hint("已打开「AI 浏览器绕过 Agent」窗口…", kind="busy")
+        open_bot_bypass_dialog(self, auto_start=True)
+
+    def _handle_bot_bypass_agent_result(self, text: str) -> None:
+        """Agent 页「绕过检查」模式完成后的处理：填入独立窗口或询问是否应用。"""
+        parsed = None
+        try:
+            parsed = _extract_json(text)
+        except Exception:
+            parsed = None
+        if not isinstance(parsed, dict):
+            self.result_view.setPlainText(text)
+            self._log("绕过检查完成（未解析到 JSON，见 Agent 原文）")
+            self._set_hint("绕过检查完成，请看 Agent 原文", kind="ready")
+            return
+
+        try:
+            self.result_view.setPlainText(json.dumps(parsed, ensure_ascii=False, indent=2))
+        except Exception:
+            self.result_view.setPlainText(text)
+
+        summary = str(parsed.get("summary") or "").strip()
+        advice = str(parsed.get("advice") or "").strip()
+        patterns = parsed.get("patterns") or []
+        self._log(
+            "绕过检查: "
+            + (summary[:120] if summary else "完成")
+            + (f" | 模式: {', '.join(map(str, patterns[:5]))}" if patterns else "")
+        )
+        self._set_hint(advice[:200] if advice else (summary[:200] or "绕过检查完成"), kind="ready")
+
+        # 有独立窗口则填入结果，由窗口「应用方案」
+        dlg = getattr(self, "_bot_bypass_dlg", None)
+        if dlg is not None:
+            try:
+                dlg._parsed = parsed
+                dlg._raw_text = text
+                dlg._show_parsed(parsed)
+                dlg.apply_btn.setEnabled(bool(parsed.get("browser_opts") or parsed.get("hook_js")))
+                dlg._set_status(summary[:120] or "分析完成", busy=False)
+                dlg.show()
+                dlg.raise_()
+                return
+            except Exception:
+                pass
+
+        opts = parsed.get("browser_opts") if isinstance(parsed.get("browser_opts"), dict) else {}
+        hook_js = str(parsed.get("hook_js") or "").strip()
+        if not opts and not hook_js:
+            return
+        lines = [summary] if summary else []
+        if patterns:
+            lines.append("识别到: " + ", ".join(str(p) for p in patterns[:8]))
+        if advice:
+            lines.append(advice)
+        lines.append(
+            "\n是否应用？将：关闭「真实浏览器」+ 开启暴力猴/Hook + 写入站点补丁"
+            "，并自动重启浏览器"
+        )
+        if self._ask_scroll_confirm("应用绕过方案？", "\n".join(lines)):
+            self.apply_bot_bypass_result(parsed, parent=self)
+
+    def apply_bot_bypass_result(
+        self, parsed: dict, *, parent=None, auto_restart: bool = True
+    ) -> bool:
+        """写入 browser_opts + hook_js。成功返回 True。
+
+        auto_restart=False 时只写入/同步选项，由调用方自行决定是否启动浏览器。
+        """
+        if not isinstance(parsed, dict):
+            return False
+        parent = parent or self
+        opts = parsed.get("browser_opts") if isinstance(parsed.get("browser_opts"), dict) else {}
+        hook_js = str(parsed.get("hook_js") or "").strip()
+        advice = str(parsed.get("advice") or "").strip()
+        if not opts and not hook_js:
+            QMessageBox.information(parent, "提示", "方案里没有 browser_opts / hook_js 可应用")
+            return False
+
+        self._prepare_bypass_browser_opts(opts)
+        self._save_config()
+
+        if hook_js:
+            try:
+                from core.browser_ext_manager import export_hooks_to_userscript
+
+                paths = export_hooks_to_userscript(
+                    include_anti_debug=self._act_anti.isChecked() if hasattr(self, "_act_anti") else False,
+                    include_crypto_hook=self._act_hook.isChecked() if hasattr(self, "_act_hook") else True,
+                    inject_opts=self._inject_opts_from_ui() if hasattr(self, "_inject_opts_from_ui") else None,
+                    extra_js=hook_js,
+                    mark_pending_install=True,
+                )
+                self._log(f"已写入绕过补丁: {paths['userscript']}")
+                if hasattr(self, "_refresh_userscript_preview"):
+                    self._refresh_userscript_preview()
+                if hasattr(self, "_focus_userscript_tab"):
+                    self._focus_userscript_tab()
+            except Exception as e:
+                QMessageBox.warning(parent, "写入失败", str(e))
+                self._log(f"写入绕过补丁失败: {e}")
+                return False
+
+        if auto_restart:
+            self._set_hint("绕过方案已应用，正在自动重启浏览器…", kind="busy")
+            self._prompt_reopen_browser(
+                "绕过方案已应用"
+                + ("，并写入站点补丁 hook_js" if hook_js else "")
+                + "。\n已自动开启暴力猴/密桥 Hook；请勿再勾「真实浏览器」。"
+                + ("\n" + advice if advice else "")
+            )
+        else:
+            self._set_hint(
+                "绕过方案已写入"
+                + ("（含 hook_js）" if hook_js else "")
+                + "，等待启动浏览器",
+                kind="ready",
+            )
+            self._log(
+                "绕过方案已同步到实验室"
+                + ("，并写入 hook_js" if hook_js else "")
+                + "（未自动重启）"
+            )
+        return True
+
     def _handle_anti_debug_agent_result(self, text: str) -> None:
         """解析 anti_debug JSON：套用注入勾选 + 写入 AI 生成的 hook_js。"""
         parsed = None
@@ -2930,28 +5198,18 @@ class AILabTab(QWidget):
         if advice:
             lines.append(advice)
         lines.append(
-            "\n是否应用？将：勾选注入项 + 生成/写入 Hook 脚本"
+            "\n是否应用？将：勾选注入项 + 开启暴力猴/Hook + 写入脚本"
             + ("（含 AI 补丁）" if hook_js else "")
-            + "（需重新启动浏览器）"
+            + "，并自动重启浏览器"
         )
-        reply = QMessageBox.question(
-            self,
-            "应用反调试方案？",
-            "\n".join(lines),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
+        if not self._ask_scroll_confirm("应用反调试方案？", "\n".join(lines)):
             return
 
         if opts:
             self._apply_anti_debug_inject_opts(opts)
-        # 有 hook_js 时务必开密桥 Hook 扩展
+        # 有 hook_js 时开密桥 Hook + 暴力猴
         if hook_js:
-            if hasattr(self, "_act_cb_hook"):
-                self._act_cb_hook.setChecked(True)
-            if hasattr(self, "userscript_enable_check"):
-                self.userscript_enable_check.setChecked(True)
+            self._enable_hook_injection_channels(enable_vm=True)
             if hasattr(self, "_act_anti"):
                 self._act_anti.setChecked(True)
         self._save_config()
@@ -2974,22 +5232,95 @@ class AILabTab(QWidget):
         self._prompt_reopen_browser(
             "已按 AI 识别结果更新注入项"
             + ("，并写入站点补丁 hook_js" if hook_js else "")
-            + "。请到「Hook」页查看生成代码。"
+            + "。可到「Hook」页查看生成代码。"
         )
 
-    def _prompt_reopen_browser(self, reason: str = "") -> None:
-        """扩展/Hook 变更后统一提示重启浏览器。"""
-        running = bool(self._worker and self._worker.isRunning())
-        msg = reason.strip() + ("\n\n" if reason.strip() else "")
-        if running:
-            msg += (
-                "请先点「停止」，再点「启动」重新打开浏览器，"
-                "扩展与油猴脚本才会生效。"
+    def _current_lab_restart_target(self) -> tuple[str, bool, int]:
+        """取自动重启用的 URL / 是否走解密代理 / 端口。"""
+        url = ""
+        w = self._worker
+        if w is not None:
+            url = str(getattr(w, "url", "") or "").strip()
+        if not url:
+            url = self.url_edit.text().strip()
+        if url and not url.startswith(("http://", "https://")):
+            url = "https://" + url
+
+        browser = self._browser_cfg()
+        mitm_port = int(browser.get("mitm_port", 8083) or 8083)
+        try:
+            win = self.window()
+            control = getattr(win, "control", None)
+            if control is not None and hasattr(control, "decrypt_port"):
+                mitm_port = int(control.decrypt_port.value())
+        except Exception:
+            pass
+
+        use_mitm = False
+        cur = self.lab_browser_proxy_port()
+        if cur:
+            use_mitm = True
+            mitm_port = int(cur)
+        elif bool(browser.get("use_mitm_proxy", False)) and self._decrypt_proxy_ready(
+            mitm_port
+        ):
+            use_mitm = True
+        return url, use_mitm, mitm_port
+
+    def _schedule_lab_browser_restart(
+        self,
+        reason: str = "",
+        *,
+        enable_vm: bool = True,
+    ) -> None:
+        """Hook/扩展变更后：开暴力猴（可选）并自动重启浏览器，保留已采数据。"""
+        # 真实浏览器下 Hook 不生效，先切回普通模式
+        if self._is_real_browser():
+            self._set_proxy_only(False, persist=True)
+            self._log("自动重启前已关闭「真实浏览器」，以加载 Hook/拟真")
+
+        self._enable_hook_injection_channels(enable_vm=enable_vm)
+        self._save_config()
+
+        url, use_mitm, mitm_port = self._current_lab_restart_target()
+        if not url:
+            self._log("无法自动重启：URL 为空，请先填写目标地址后点「启动」")
+            self._set_hint("请填写目标 URL 后启动浏览器", kind="warn")
+            return
+
+        hint = (reason.strip() + "\n" if reason.strip() else "") + (
+            "浏览器已自动重启；若油猴弹出安装确认请点「确认安装」。"
+            if enable_vm
+            else "浏览器已自动重启，Hook/扩展已生效。"
+        )
+        if self.is_lab_browser_running():
+            self._pending_proxy_restart = {
+                "url": url,
+                "mitm_port": mitm_port,
+                "use_mitm_proxy": use_mitm,
+                "hint": hint,
+                "preserve_capture": True,
+            }
+            self._log(
+                "Hook/扩展已更新 → 正在自动重启浏览器（保留已采流量/JS/Hook 日志）…"
             )
-            self._log("请重新打开浏览器以使扩展/Hook 生效")
-        else:
-            msg += "请点「启动」打开浏览器；若油猴弹出安装确认，请点「安装」。"
-        QMessageBox.information(self, "请重新打开浏览器", msg)
+            self._set_hint("正在自动重启浏览器以使 Hook 生效…", kind="busy")
+            # 勿走 _stop_browser：它会清空 pending
+            self._worker.stop()
+            return
+
+        self._set_hint("正在自动启动浏览器以使 Hook 生效…", kind="busy")
+        self._launch_lab_browser(
+            url=url,
+            use_mitm_proxy=use_mitm,
+            mitm_port=mitm_port,
+            hint=hint,
+        )
+        self._log("浏览器未在运行 → 已自动启动以加载 Hook")
+
+    def _prompt_reopen_browser(self, reason: str = "") -> None:
+        """扩展/Hook 变更后：自动开暴力猴并重启浏览器（不再让用户手点停止/启动）。"""
+        self._schedule_lab_browser_restart(reason, enable_vm=True)
 
     def _export_hooks_to_tampermonkey(self) -> None:
         """按当前注入勾选生成 userscript，同步到 cb_hook，并提示重启。"""
@@ -3005,12 +5336,12 @@ class AILabTab(QWidget):
             self._save_config()
             self._log(f"已生成油猴脚本: {paths['userscript']}")
             self._log(f"已同步密桥 Hook 扩展: {paths['cb_hook_inject']}")
-            if hasattr(self, "userscript_enable_check"):
-                self.userscript_enable_check.setChecked(True)
+            self._enable_hook_injection_channels(enable_vm=True)
+            self._save_config()
             self._refresh_userscript_preview()
             self._focus_userscript_tab()
             self._prompt_reopen_browser(
-                "Hook 已生成。可在「Hook」页勾选启用，然后停止并重新启动浏览器。"
+                "Hook 已生成并已开启暴力猴/密桥 Hook，正在自动重启浏览器。"
             )
         except Exception as e:
             QMessageBox.warning(self, "生成失败", str(e))
@@ -3152,6 +5483,22 @@ class AILabTab(QWidget):
         self._analysis_worker = None
         self._update_next_hint()
 
+        # 旧版流式分析也写入「上下文」页，便于对照
+        try:
+            if self._chat_history:
+                self._append_ai_context(
+                    "request",
+                    "======== 旧版分析 messages ========\n\n"
+                    + json.dumps(self._chat_history, ensure_ascii=False, indent=2)
+                    + "\n",
+                )
+            self._append_ai_context(
+                "response",
+                "======== 旧版分析响应 ========\n\n" + (raw_text or "").rstrip() + "\n",
+            )
+        except Exception:
+            pass
+
         if self._chat_history and self._chat_history[-1].get("role") == "user":
             self._chat_history.append({"role": "assistant", "content": raw_text})
 
@@ -3222,6 +5569,8 @@ class AILabTab(QWidget):
         self._log(f"已加载 {len(steps)} 个步骤到可视化构建器")
 
     def _selected_flow(self) -> dict | None:
+        from core.flow_format import is_pending_response_body
+
         item = self.flow_list.currentItem()
         if item:
             idx = item.data(Qt.ItemDataRole.UserRole)
@@ -3229,7 +5578,7 @@ class AILabTab(QWidget):
                 return self._flows[idx]
         for f in reversed(self._flows):
             body = (f.get("response_body") or "").strip()
-            if body and body not in ("(等待响应…)", "(等待响应...)"):
+            if body and not is_pending_response_body(body):
                 return f
         return self._flows[-1] if self._flows else None
 

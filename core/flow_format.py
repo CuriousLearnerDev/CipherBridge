@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import re
 from urllib.parse import urlparse
 
@@ -124,23 +126,131 @@ def format_request_burp(flow: dict, *, max_body: int = 0) -> str:
     return "\n".join(lines)
 
 
+def is_pending_response_body(body: str | None) -> bool:
+    """识别尚未收到响应的占位正文（含历史中文与 Windows 乱码形态）。"""
+    if body is None:
+        return False
+    s = str(body).strip()
+    if not s:
+        return False
+    if s in (
+        "(pending)",
+        "(waiting)",
+        "(waiting response...)",
+        "(等待响应…)",
+        "(等待响应...)",
+        "(等待响应)",
+    ):
+        return True
+    # UTF-8「等待响应」被当 GBK/Latin-1 读时的常见乱码
+    if "等待响应" in s:
+        return True
+    if s.startswith("(�") and ("Ӧ" in s or "Ӧ��" in s or len(s) < 24):
+        return True
+    return False
+
+
+def _hex_dump(raw: bytes, *, width: int = 16, max_bytes: int = 2048) -> str:
+    """经典 Hex dump，默认最多 2KB。"""
+    data = raw[:max_bytes]
+    lines = []
+    for i in range(0, len(data), width):
+        chunk = data[i : i + width]
+        hex_part = " ".join(f"{b:02x}" for b in chunk)
+        asc = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
+        lines.append(f"{i:08x}  {hex_part:<{width * 3}}  {asc}")
+    if len(raw) > max_bytes:
+        lines.append(f"…(hex 已截断，共 {len(raw)} bytes)")
+    return "\n".join(lines)
+
+
+def _format_binary_body(flow: dict, summary: str) -> str:
+    """二进制响应：摘要 + Hex + Base64 原始数据。"""
+    raw = b""
+    b64 = flow.get("response_body_b64") or ""
+    if isinstance(b64, str) and b64.strip():
+        try:
+            raw = base64.b64decode(b64, validate=False)
+        except (binascii.Error, ValueError):
+            raw = b""
+    if not raw and isinstance(flow.get("response_body"), bytes):
+        raw = flow["response_body"]
+
+    ct = ""
+    hdrs = flow.get("response_headers") or {}
+    if isinstance(hdrs, dict):
+        for k, v in hdrs.items():
+            if str(k).lower() == "content-type":
+                ct = str(v)
+                break
+    n = int(flow.get("response_body_len") or len(raw) or 0)
+    head = summary.strip() if summary.startswith("(binary") else (
+        f"(binary · {ct or 'unknown'} · {n or len(raw)} bytes)"
+    )
+    parts = [head, ""]
+    if raw:
+        parts.append(f"---- Hex（前 {min(len(raw), 2048)} / {len(raw)} bytes）----")
+        parts.append(_hex_dump(raw))
+        parts.append("")
+        parts.append("---- Base64（可复制）----")
+        # 折行便于阅读
+        b64_out = base64.b64encode(raw).decode("ascii")
+        wrap = 76
+        parts.extend(b64_out[i : i + wrap] for i in range(0, len(b64_out), wrap))
+    else:
+        parts.append("（未保存原始字节；请重新采集该流量）")
+    return "\n".join(parts)
+
+
 def format_response_burp(flow: dict, *, max_body: int = 0) -> str:
     """Burp 风格响应报文."""
     resp_body = flow.get("response_body") or ""
-    if isinstance(resp_body, bytes):
-        resp_body = resp_body.decode("utf-8", errors="replace")
-    resp_body = str(resp_body)
-    if resp_body in ("(等待响应…)", "(等待响应...)"):
-        return "(等待响应…)"
+    body_kind = str(flow.get("body_kind") or flow.get("_body_kind") or "")
+    has_b64 = bool(flow.get("response_body_b64"))
+
+    if isinstance(resp_body, bytes) or body_kind == "binary" or has_b64 or (
+        isinstance(resp_body, str) and resp_body.startswith("(binary")
+    ):
+        if isinstance(resp_body, bytes):
+            summary = f"(binary · {len(resp_body)} bytes)"
+        else:
+            summary = str(resp_body) if str(resp_body).startswith("(binary") else "(binary)"
+        # 乱码旧数据且无 b64：提示重采
+        if (
+            isinstance(resp_body, str)
+            and not has_b64
+            and not resp_body.startswith("(binary")
+        ):
+            sample = resp_body[:3000]
+            if sample.count("\ufffd") > max(12, len(sample) // 25):
+                summary = "(binary · garbled · 无原始字节，请重新采集)"
+                resp_body = _format_binary_body(flow, summary)
+            else:
+                # 当作用文本
+                pass
+        else:
+            resp_body = _format_binary_body(flow, summary)
+    else:
+        resp_body = str(resp_body)
+        sample = resp_body[:3000]
+        if sample.count("\ufffd") > max(12, len(sample) // 25):
+            resp_body = _format_binary_body(
+                flow, "(binary · garbled · 请重新采集以保存原始字节)"
+            )
+
+    status = int(flow.get("status") or 0)
+
+    if is_pending_response_body(resp_body):
+        return "(pending)"
     if max_body and len(resp_body) > max_body:
         resp_body = resp_body[:max_body] + "\n…(body 已截断)"
 
-    status = int(flow.get("status") or 0)
     if status <= 0 and not resp_body.strip():
         return "(无响应)"
 
+    # 有正文但 status 仍为 0：多为响应未合并成功，勿伪造 200
     if status <= 0:
-        status = 200
+        return "(pending — incomplete)\n\n" + resp_body
 
     hdrs = _header_map(flow.get("response_headers"))
     lines = [f"HTTP/1.1 {status} {_reason_phrase(status)}"]
@@ -157,7 +267,12 @@ def flow_to_parser_raw(flow: dict) -> str:
     """请求解析器可解析的 Burp 报文（请求 + 可选响应）。"""
     req = format_request_burp(flow)
     resp = format_response_burp(flow)
-    if resp in ("(等待响应…)", "(无响应)", ""):
+    if (
+        not resp
+        or resp.startswith("(pending")
+        or resp in ("(等待响应…)", "(无响应)", "")
+        or is_pending_response_body(flow.get("response_body"))
+    ):
         return req
     return req + "\n\n" + resp
 

@@ -198,6 +198,88 @@ class PythonHighlighter(QSyntaxHighlighter):
                 self.setFormat(m.capturedStart(), m.capturedLength(), fmt)
 
 
+class LlmIoHighlighter(QSyntaxHighlighter):
+    """LLM 上下文展示：分隔标题 + JSON 键值轻量高亮（非完整 JSON 解析器）."""
+
+    def __init__(self, document, theme: str | None = None) -> None:
+        super().__init__(document)
+        self.apply_theme(theme)
+
+    def apply_theme(self, theme: str | None = None) -> None:
+        self._theme = theme
+        colors = colors_for_theme(theme)
+        self._text = _fmt(colors["text"])
+        self._banner = _fmt(colors["class_name"], bold=True)
+        self._section = _fmt(colors["keyword"], bold=True)
+        self._key = _fmt(colors["self"])
+        self._string = _fmt(colors["string"])
+        self._number = _fmt(colors["number"])
+        self._literal = _fmt(colors["keyword"])
+        self._meta = _fmt(colors["function"])
+        self._banner_re = QRegularExpression(r"^={3,}.*={3,}\s*$")
+        self._section_re = QRegularExpression(r"^——.+——\s*$")
+        self._meta_re = QRegularExpression(
+            r"^(tools:|stop_reason:|usage:|mode:)\s*"
+        )
+        self._key_re = QRegularExpression(r'"([^"\\]|\\.)*"\s*:')
+        self._string_re = QRegularExpression(r'"([^"\\]|\\.)*"')
+        self._number_re = QRegularExpression(r"-?\b\d+\.?\d*([eE][+-]?\d+)?\b")
+        self._literal_re = QRegularExpression(r"\b(true|false|null)\b")
+        self.rehighlight()
+
+    def highlightBlock(self, text: str) -> None:
+        self.setFormat(0, len(text), self._text)
+        if self._banner_re.match(text).hasMatch():
+            self.setFormat(0, len(text), self._banner)
+            return
+        if self._section_re.match(text).hasMatch():
+            self.setFormat(0, len(text), self._section)
+            return
+        mm = self._meta_re.match(text)
+        if mm.hasMatch():
+            self.setFormat(0, mm.capturedLength(), self._meta)
+
+        # 先标 key，再标其余字符串，避免 key 被 string 规则盖住
+        key_spans: list[tuple[int, int]] = []
+        it = self._key_re.globalMatch(text)
+        while it.hasNext():
+            m = it.next()
+            # 只高亮到冒号前的引号串
+            raw = m.captured()
+            colon = raw.rfind(":")
+            key_len = colon if colon > 0 else m.capturedLength()
+            # 去掉尾部空白
+            while key_len > 0 and raw[key_len - 1].isspace():
+                key_len -= 1
+            self.setFormat(m.capturedStart(), key_len, self._key)
+            key_spans.append((m.capturedStart(), m.capturedStart() + key_len))
+
+        def _in_key(pos: int) -> bool:
+            for a, b in key_spans:
+                if a <= pos < b:
+                    return True
+            return False
+
+        it = self._string_re.globalMatch(text)
+        while it.hasNext():
+            m = it.next()
+            if _in_key(m.capturedStart()):
+                continue
+            self.setFormat(m.capturedStart(), m.capturedLength(), self._string)
+
+        it = self._number_re.globalMatch(text)
+        while it.hasNext():
+            m = it.next()
+            if _in_key(m.capturedStart()):
+                continue
+            self.setFormat(m.capturedStart(), m.capturedLength(), self._number)
+
+        it = self._literal_re.globalMatch(text)
+        while it.hasNext():
+            m = it.next()
+            self.setFormat(m.capturedStart(), m.capturedLength(), self._literal)
+
+
 def attach_python_highlighter(widget) -> PythonHighlighter:
     """给编辑器挂上高亮，返回 highlighter 实例（需保持引用）."""
     from core.theme import current_theme
@@ -209,6 +291,20 @@ def attach_python_highlighter(widget) -> PythonHighlighter:
         return existing
     hl = PythonHighlighter(widget.document(), theme=theme)
     widget._python_highlighter = hl
+    return hl
+
+
+def attach_llm_io_highlighter(widget) -> LlmIoHighlighter:
+    """上下文请求/响应展示用高亮。"""
+    from core.theme import current_theme
+
+    existing = getattr(widget, "_llm_io_highlighter", None)
+    theme = current_theme()
+    if existing is not None:
+        existing.apply_theme(theme)
+        return existing
+    hl = LlmIoHighlighter(widget.document(), theme=theme)
+    widget._llm_io_highlighter = hl
     return hl
 
 
@@ -230,11 +326,12 @@ def refresh_all_highlighters(root=None) -> None:
             widgets.extend(w.findChildren(QWidget))
     seen: set[int] = set()
     for w in widgets:
-        hl = getattr(w, "_python_highlighter", None)
-        if hl is None:
-            continue
-        hid = id(hl)
-        if hid in seen:
-            continue
-        seen.add(hid)
-        hl.apply_theme(theme)
+        for attr in ("_python_highlighter", "_llm_io_highlighter"):
+            hl = getattr(w, attr, None)
+            if hl is None:
+                continue
+            hid = id(hl)
+            if hid in seen:
+                continue
+            seen.add(hid)
+            hl.apply_theme(theme)

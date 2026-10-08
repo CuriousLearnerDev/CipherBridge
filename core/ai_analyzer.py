@@ -108,6 +108,7 @@ SYSTEM_PROMPT_DECRYPT = """你是 JavaScript 逆向与 HTTP 加解密分析专�
 {
   "summary": "简短中文分析",
   "confidence": "high|medium|low",
+  "crypto_pattern": "fixed_symmetric|hybrid_session_key|asymmetric_only|sign_only",
   "code_locations": [
     {"url": "https://example.com/app.js", "approx_line": 1284, "offset": 45678, "what": "CryptoJS.AES.encrypt", "snippet": "CryptoJS.AES.encrypt(...)"}
   ],
@@ -120,19 +121,21 @@ SYSTEM_PROMPT_DECRYPT = """你是 JavaScript 逆向与 HTTP 加解密分析专�
 规则:
 1. type 必须从提供的步骤类型列表中选择
 2. params 字段名与密桥 CipherBridge 可视化构建器一致
-3. 密钥优先从 Hook 日志提取，不要编造
-4. 不确定时 confidence 设为 low，并在 summary 说明需人工确认
-5. **解密端请求用 🔓 解密字段**；**响应体加密时用 🔓 解密响应字段**（field 支持嵌套路径如 result.data）
-6. 用户追问时输出**完整更新后**的 JSON
-7. **禁止** key/mode/padding/algo 为 "unknown"；未确认则不要生成该步骤
-8. Hook 含 `Key (String):` 时必须写入 steps 的 key
-9. 编码转换含 encode_type: Base64编码/Base64解码/Hex编码/Hex解码/URL编码/URL解码
-10. scope: 📋 Body (JSON) / 📋 Body (Form) / 🔗 URL Query（仅用于请求步骤）
-11. 流量含 Request/Response Headers，签名/Token 常在 Header 中，可用 🏷 设置Header 或 📝 签名(Hash) 写入 Header
-12. **禁止**在 🔓 解密字段 / 🔒 加密字段 前后添加 Base64/Hex 编解码：AES/DES/SM4/RSA 等 SDK 已内置 input_fmt/output（默认 Base64），密文字段直接写加解密步骤即可
-13. 🔤 编码转换仅用于明文层编码（如 Base64 包 JSON 字符串），不用于 AES 密文
-14. JS 若带 miniprogram:// 前缀，为微信小程序反编译源码；常见 CryptoJS / encrypt / wx.request，优先从中找密钥与字段
-15. **code_locations** 记录加解密相关源码位置（url / approx_line / what / snippet），仅供人工找代码；与 steps 无关，不参与 plugin 生成；有 JS 依据时尽量填写
+3. 先判定模式：fixed_symmetric / hybrid_session_key / asymmetric_only / sign_only（写入 crypto_pattern）
+4. 密钥：固定密钥才从 Hook 写入 params.key；随机会话密钥禁止把单次 Hook Key 固化为长期解密 key
+5. hybrid：应先非对称解密钥字段，再对称解数据字段；无私钥则 confidence=low 并在 summary 说明
+6. 不确定时 confidence 设为 low，并在 summary 说明需人工确认
+7. **解密端请求用 🔓 解密字段**；**响应体加密时用 🔓 解密响应字段**（field 支持嵌套路径如 result.data）
+8. 用户追问时输出**完整更新后**的 JSON
+9. **禁止** key/mode/padding/algo 为 "unknown"；未确认则不要生成该步骤
+10. Hook 含 `Key (String):` 且为固定密钥模式时必须写入 steps 的 key
+11. 编码转换含 encode_type: Base64编码/Base64解码/Hex编码/Hex解码/URL编码/URL解码
+12. scope: 📋 Body (JSON) / 📋 Body (Form) / 🔗 URL Query（仅用于请求步骤）
+13. 流量含 Request/Response Headers，签名/Token 常在 Header 中，可用 🏷 设置Header 或 📝 签名(Hash) 写入 Header
+14. **禁止**在 🔓 解密字段 / 🔒 加密字段 前后添加 Base64/Hex 编解码：AES/DES/SM4/RSA 等 SDK 已内置 input_fmt/output（默认 Base64），密文字段直接写加解密步骤即可
+15. 🔤 编码转换仅用于明文层编码（如 Base64 包 JSON 字符串），不用于 AES 密文
+16. JS 若带 miniprogram:// 前缀，为微信小程序反编译源码；常见 CryptoJS / encrypt / wx.request，优先从中找密钥与字段
+17. **code_locations** 记录加解密相关源码位置（url / approx_line / what / snippet），仅供人工找代码；与 steps 无关，不参与 plugin 生成；有 JS 依据时尽量填写
 """
 
 SYSTEM_PROMPT_ENCRYPT = """你是 JavaScript 逆向与 HTTP 加解密分析专家。
@@ -144,6 +147,7 @@ SYSTEM_PROMPT_ENCRYPT = """你是 JavaScript 逆向与 HTTP 加解密分析专�
 {
   "summary": "简短中文分析",
   "confidence": "high|medium|low",
+  "crypto_pattern": "fixed_symmetric|hybrid_session_key|asymmetric_only|sign_only",
   "code_locations": [
     {"url": "https://example.com/app.js", "approx_line": 200, "offset": 8000, "what": "encrypt / sign", "snippet": "..."}
   ],
@@ -157,16 +161,17 @@ SYSTEM_PROMPT_ENCRYPT = """你是 JavaScript 逆向与 HTTP 加解密分析专�
 规则:
 1. type 必须从提供的步骤类型列表中选择
 2. **加密端请求用 🔒 加密字段**；**需加密响应体时用 🔒 加密响应字段**
-3. 需要签名时添加 📝 签名(Hash) / 📝 签名(HMAC带密钥) / 📝 签名(排序拼接)
-4. 密钥优先从 Hook 日志提取，不要编造
-5. **禁止** key/mode/padding/algo 为 "unknown"
-6. Hook 含 `Key (String):` 时必须写入 key
-7. 编码转换含 encode_type；scope 用标准 Body/Form/Query 标签
-8. 用户追问时输出完整 JSON
-9. **禁止**在 🔒 加密字段 / 🔓 解密字段 前后添加 Base64/Hex 编解码：加解密 SDK 已内置 Base64/Hex 处理，密文字段只需一步加解密
-10. 🔤 编码转换仅用于明文层，不用于 AES 等密文
-11. JS 若带 miniprogram:// 前缀，为微信小程序反编译源码；常见 CryptoJS / encrypt / wx.request，优先从中找密钥与字段
-12. **code_locations** 记录加解密相关源码位置，仅供人工找代码；与 steps/plugin 无关
+3. 先判定 crypto_pattern；hybrid_session_key 时：公钥可固定，AES Key/IV 每请求随机，禁止固化 Hook 单次 Key
+4. 需要签名时添加 📝 签名(Hash) / 📝 签名(HMAC带密钥) / 📝 签名(排序拼接)
+5. 固定密钥优先从 Hook 提取；不要编造；动态会话密钥不要抄采样 Hook Key
+6. **禁止** key/mode/padding/algo 为 "unknown"
+7. Hook 含 `Key (String):` 且为固定密钥模式时必须写入 key
+8. 编码转换含 encode_type；scope 用标准 Body/Form/Query 标签
+9. 用户追问时输出完整 JSON
+10. **禁止**在 🔒 加密字段 / 🔓 解密字段 前后添加 Base64/Hex 编解码：加解密 SDK 已内置 Base64/Hex 处理，密文字段只需一步加解密
+11. 🔤 编码转换仅用于明文层，不用于 AES 等密文
+12. JS 若带 miniprogram:// 前缀，为微信小程序反编译源码；常见 CryptoJS / encrypt / wx.request，优先从中找密钥与字段
+13. **code_locations** 记录加解密相关源码位置，仅供人工找代码；与 steps/plugin 无关
 """
 
 
@@ -642,8 +647,10 @@ def build_analysis_prompt(
             )
     elif focus_hook:
         focus_note = (
-            "\n**本次重点**: 优先从 Hook 日志提取密钥/算法；其次分析页面 JS 源码；"
-            "HTTP 流量仅作字段名参考。Hook 有 Key 时必须写入 steps。\n"
+            "\n**本次重点**: 优先从 Hook 日志提取算法/模式/公钥；其次分析页面 JS；"
+            "HTTP 流量确认字段名。先判 fixed_symmetric vs hybrid_session_key："
+            "Hook 同时有对称 Key 与 RSA/公钥、或流量多字段(数据+key+iv 密文)→混合；"
+            "仅固定对称才把 Hook Key 写入 steps；混合禁止固化单次会话 Key。\n"
         )
 
     role_note = ""
@@ -651,12 +658,15 @@ def build_analysis_prompt(
         role_note = (
             "\n**加密端任务**: 生成 Burp→服务器 的加密/签名步骤。"
             "浏览器流量是密文，请推断如何把 Burp 明文再加密成同样格式。"
-            "步骤用 🔒 加密字段，可含签名 Header 步骤。\n"
+            "步骤用 🔒 加密字段，可含签名 Header。"
+            "hybrid_session_key：公钥固定 + 每请求随机对称 Key/IV + 非对称封装，"
+            "勿把 Hook 采样 Key 写死。\n"
         )
     else:
         role_note = (
             "\n**解密端任务**: 生成 浏览器→Burp 的解密步骤。"
-            "请求用 🔓 解密字段；若响应 JSON 某字段也是密文，追加 🔓 解密响应字段（field 如 result.data）。\n"
+            "请求用 🔓 解密字段；若响应 JSON 某字段也是密文，追加 🔓 解密响应字段（field 如 result.data）。"
+            "hybrid 无私钥时 confidence=low，勿假装固定 AES 可长期解密。\n"
         )
 
     return f"""目标角色: {role} 端代理
@@ -677,13 +687,13 @@ Hook 日志 (CryptoJS / RSA / HMAC，含 Key/IV/模式):
 
 
 def _normalize_base_url(base_url: str) -> str:
+    """OpenAI 兼容网关统一落到 …/v1（New API / One API 等常只填主机）。"""
     base = (base_url or "https://api.openai.com/v1").rstrip("/")
-    if base.endswith("/v1"):
-        return base
-    # DeepSeek 等常见兼容端点需要 /v1
-    if "deepseek.com" in base or "openai.com" in base:
-        return base + "/v1"
-    return base
+    low = base.lower()
+    if low.endswith("/v1") or low.endswith("/v1/") or "/anthropic" in low:
+        return base.rstrip("/")
+    # 主机根地址 → 自动补 /v1，避免打到前端 HTML
+    return base + "/v1"
 
 
 def _api_proxies(cfg: dict) -> dict | None:
@@ -713,6 +723,9 @@ def _build_request(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
+    from core.ai_config import enrich_ai_headers
+
+    headers = enrich_ai_headers(headers, url=url, cfg=cfg)
     body = {
         "model": model,
         "messages": messages,
@@ -730,24 +743,31 @@ def test_ai_config(cfg: dict) -> tuple[bool, str]:
 
     messages = [{"role": "user", "content": "回复 OK"}]
     try:
+        from core.ai_http import AIHttpError, post_json
+
         url, headers, proxies, body = _build_request(cfg, messages, stream=False)
         body["max_tokens"] = 8
         model = body.get("model", "")
-        resp = requests.post(
-            url, headers=headers, json=body, proxies=proxies, timeout=(10, 45),
+        data = post_json(
+            url, headers=headers, body=body, proxies=proxies, timeout=(10, 45)
         )
-        resp.raise_for_status()
-        data = resp.json()
         reply = (data.get("choices", [{}])[0].get("message", {}).get("content") or "").strip()
         preview = reply[:120] + ("…" if len(reply) > 120 else "")
         return True, f"连接成功\n\n端点: {url}\n模型: {model}\n回复: {preview or '(空)'}"
+    except AIHttpError as e:
+        return False, str(e)
     except requests.HTTPError as e:
+        from core.ai_http import cloudflare_hint, looks_like_cloudflare
+
         detail = ""
         if e.response is not None:
             try:
                 detail = e.response.json().get("error", {}).get("message", "")
             except Exception:
                 detail = (e.response.text or "")[:200]
+            if looks_like_cloudflare(e.response.text, e.response.status_code):
+                url = getattr(e.response, "url", "") or ""
+                return False, cloudflare_hint(str(url))
         msg = str(e)
         if detail:
             msg = f"{msg}\n{detail}"
@@ -800,6 +820,81 @@ def analyze_crypto(
     return _clean_steps(parsed, role)
 
 
+def revise_steps_after_verify_failure(
+    *,
+    cfg: dict,
+    role: str,
+    previous_result: dict,
+    verify_feedback: str,
+    attempt: int,
+    max_attempts: int = 5,
+    hook_lines: list[str] | None = None,
+    sample_flow: dict | None = None,
+) -> dict:
+    """根据自动验证失败的请求/响应，让 AI 修正 steps（同步一次调用）。"""
+    role = "encrypt" if (role or "").lower() == "encrypt" else "decrypt"
+    prev = previous_result if isinstance(previous_result, dict) else {}
+    hooks = "\n".join((hook_lines or [])[-40:])
+    if len(hooks) > 6000:
+        hooks = hooks[-6000:]
+    flow_snip = ""
+    if isinstance(sample_flow, dict):
+        try:
+            flow_snip = json.dumps(
+                {
+                    "method": sample_flow.get("method"),
+                    "url": sample_flow.get("url"),
+                    "request_body": (sample_flow.get("request_body")
+                                     or sample_flow.get("body")
+                                     or "")[:1200],
+                    "response_body": (sample_flow.get("response_body")
+                                      or sample_flow.get("response")
+                                      or "")[:800],
+                },
+                ensure_ascii=False,
+            )
+        except Exception:
+            flow_snip = str(sample_flow)[:1200]
+
+    try:
+        prev_json = json.dumps(prev, ensure_ascii=False)[:8000]
+    except Exception:
+        prev_json = str(prev)[:8000]
+
+    sys_p = system_prompt_for_role(role)
+    user = (
+        f"这是第 {attempt}/{max_attempts} 次自动验证失败后的修正请求。\n"
+        "上一次 steps 在采样流量上验证未通过。请根据「验证反馈」中的字段错误与"
+        "处理前/后 Body，输出**完整更新后**的 JSON（含 steps），不要 markdown。\n"
+        "要求:\n"
+        "1. 修正错误的 algo/mode/padding/key/iv/field/scope；\n"
+        "2. 若像 hybrid_session_key（数据密文+密钥密文），不要把 Hook 单次 AES Key "
+        "固化为长期方案，应体现混合链路或在 summary 说明限制；\n"
+        "3. 禁止编造密钥；仍不确定则 confidence=low；\n"
+        "4. type 必须带 emoji 完整步骤名。\n\n"
+        f"【验证反馈】\n{verify_feedback}\n\n"
+        f"【上一版 JSON】\n{prev_json}\n\n"
+        f"【Hook 摘录】\n{hooks or '(无)'}\n\n"
+        f"【采样流量摘要】\n{flow_snip or '(无)'}\n"
+    )
+    messages = [
+        {"role": "system", "content": sys_p},
+        {"role": "user", "content": user},
+    ]
+    from core.ai_http import post_json
+
+    url, headers, proxies, body = _build_request(cfg, messages, stream=False)
+    body["max_tokens"] = int(cfg.get("max_tokens") or 4096)
+    data = post_json(url, headers=headers, body=body, proxies=proxies, timeout=(20, 120))
+    text = (data.get("choices", [{}])[0].get("message", {}).get("content") or "").strip()
+    if not text:
+        raise ValueError("AI 修正返回为空")
+    parsed = _extract_json(text)
+    cleaned = _clean_steps(parsed, role)
+    cleaned["_revise_raw"] = text
+    return cleaned
+
+
 def _stream_analyze(
     flows: list[dict],
     hook_lines: list[str],
@@ -843,7 +938,11 @@ def _stream_analyze(
 
     try:
         return _read_stream(url, headers, body, proxies, on_log=on_log, on_chunk=on_chunk)
-    except requests.RequestException as e:
+    except Exception as e:
+        from core.ai_http import AIHttpError
+
+        if isinstance(e, AIHttpError) and e.status == 403:
+            raise
         log(f"流式请求失败 ({e})，尝试非流式…")
         return _blocking_analyze(messages, cfg, on_log=on_log, on_chunk=on_chunk)
 
@@ -863,7 +962,11 @@ def _stream_chat(
     log(f"继续对话 — 模型: {model}（{len(messages)} 条消息）…")
     try:
         return _read_stream(url, headers, body, proxies, on_log=on_log, on_chunk=on_chunk)
-    except requests.RequestException as e:
+    except Exception as e:
+        from core.ai_http import AIHttpError
+
+        if isinstance(e, AIHttpError) and e.status == 403:
+            raise
         log(f"流式请求失败 ({e})，尝试非流式…")
         return _blocking_analyze(messages, cfg, on_log=on_log, on_chunk=on_chunk)
 
@@ -880,39 +983,33 @@ def _read_stream(
         if on_log:
             on_log(msg)
 
+    from core.ai_http import AIHttpError, iter_sse_lines
+
     full = ""
     got_first = False
-    with requests.post(
-        url,
-        headers=headers,
-        json=body,
-        proxies=proxies,
-        timeout=(15, 180),
-        stream=True,
-    ) as resp:
-        resp.raise_for_status()
-        for raw in resp.iter_lines(decode_unicode=True):
-            if not raw or not raw.startswith("data: "):
-                continue
-            data = raw[6:].strip()
-            if data == "[DONE]":
-                break
+    try:
+        for data in iter_sse_lines(
+            url, headers=headers, body=body, proxies=proxies, timeout=(15, 180)
+        ):
             try:
                 obj = json.loads(data)
-                delta = obj.get("choices", [{}])[0].get("delta", {})
-                piece = delta.get("content") or ""
-                if piece:
-                    if not got_first:
-                        got_first = True
-                        log("已收到首包，流式输出中…")
-                    full += piece
-                    if on_chunk:
-                        on_chunk(piece)
-            except json.JSONDecodeError:
+            except Exception:
                 continue
-
+            delta = (
+                (obj.get("choices") or [{}])[0].get("delta") or {}
+            ).get("content") or ""
+            if not delta:
+                continue
+            if not got_first:
+                got_first = True
+                log("已收到首包，流式输出中…")
+            full += delta
+            if on_chunk:
+                on_chunk(delta)
+    except AIHttpError:
+        raise
     if not full:
-        raise ValueError("流式响应无内容")
+        raise requests.RequestException("流式响应为空")
     log(f"接收完成，共 {len(full)} 字符，正在解析 JSON…")
     return full
 
@@ -927,13 +1024,13 @@ def _blocking_analyze(
         if on_log:
             on_log(msg)
 
+    from core.ai_http import post_json
+
     url, headers, proxies, body = _build_request(cfg, messages, stream=False)
     log(f"非流式请求: {url}")
-    resp = requests.post(
-        url, headers=headers, json=body, proxies=proxies, timeout=(15, 180)
+    data = post_json(
+        url, headers=headers, body=body, proxies=proxies, timeout=(15, 180)
     )
-    resp.raise_for_status()
-    data = resp.json()
     full = data.get("choices", [{}])[0].get("message", {}).get("content") or ""
     if on_chunk and full:
         on_chunk(full)

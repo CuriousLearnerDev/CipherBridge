@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import queue
@@ -17,14 +18,32 @@ NETWORK_CAPTURE_SCRIPT = os.path.join(ROOT, "hooks", "network_capture.js")
 ANTI_DEBUG_SCRIPT = os.path.join(ROOT, "hooks", "anti_debug.js")
 
 _STATIC_SUFFIXES = (
-    ".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".woff", ".woff2",
+    ".js", ".mjs", ".cjs", ".ts", ".tsx", ".css",
+    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".woff", ".woff2",
     ".ttf", ".map", ".webp", ".mp4", ".mp3",
 )
 
-# 业务加解密 + 反调试常见命名；过窄会导致 security.js 等被丢掉
+# URL 路径关键字（勿放 login/auth 等过宽词，否则验证码接口也会进 JS）
 _SCRIPT_URL_KEYWORDS = (
-    "encrypt", "decrypt", "crypto", "cipher", "login", "auth", "sign", "password",
+    "encrypt", "decrypt", "crypto", "cipher", "sign",
     "security", "anti", "debug", "pack", "obfus", "protect", "guard",
+)
+# 明确不是 JS 的路径片段
+_NON_SCRIPT_URL_NEEDLES = (
+    "imgcode", "img_code", "captcha", "verifycode", "verify_code",
+    "checkcode", "check_code", "vcode", "smsimg", "getimage", "imagecode",
+    "/image/", "/img/", "/pic/", "/captcha/",
+)
+_BINARY_MAGIC = (
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+    (b"RIFF", "image/webp"),  # 粗判，后面再看 WEBP
+    (b"\x00\x00\x01\x00", "image/x-icon"),
+    (b"BM", "image/bmp"),
+    (b"PK\x03\x04", "application/zip"),
+    (b"\x1f\x8b", "application/gzip"),
 )
 # 单文件写入 Agent 的上限（过小会截掉页尾 inline debugger，如 sojson ~77k）
 _MAX_SCRIPT_STORE = 300_000
@@ -38,6 +57,68 @@ def _norm_headers(raw: dict | None, max_items: int = 80, max_val: int = 8000) ->
     for k, v in list(raw.items())[:max_items]:
         out[str(k)] = str(v)[:max_val]
     return out
+
+
+def _header_content_type(headers: dict | None) -> str:
+    if not headers:
+        return ""
+    for k, v in headers.items():
+        if str(k).lower() == "content-type":
+            return str(v).lower()
+    return ""
+
+
+def _sniff_binary_kind(raw: bytes) -> str | None:
+    if not raw:
+        return None
+    head = raw[:64]
+    for magic, kind in _BINARY_MAGIC:
+        if head.startswith(magic):
+            if magic == b"RIFF" and b"WEBP" not in raw[:16]:
+                continue
+            return kind
+    # 高比例 NUL / 非文本控制字节 → 二进制
+    sample = raw[:4096]
+    if b"\x00" in sample[:512]:
+        return "application/octet-stream"
+    ctrl = sum(1 for b in sample if b < 9 or (13 < b < 32))
+    if ctrl > max(32, len(sample) // 16):
+        return "application/octet-stream"
+    return None
+
+
+def _looks_like_js_text(content: str) -> bool:
+    """正文是否像 JS / HTML 源码（非图片乱码）。"""
+    if not content:
+        return False
+    sample = content[:4000]
+    if "\ufffd" in sample[:200] and sample.count("\ufffd") > 8:
+        return False
+    head = sample.lstrip()[:120]
+    if head.startswith(("!", "(", "{", "var ", "const ", "let ", "function",
+                        "\"use strict", "'use strict", "//", "/*", "import ",
+                        "export ", "<!DOCTYPE", "<html", "<!--")):
+        return True
+    # 常见打包器特征
+    low = sample[:800].lower()
+    return any(
+        x in low
+        for x in (
+            "webpack", "define(", "require(", "module.exports",
+            "window.", "document.", "function(", "=>{",
+        )
+    )
+
+
+def _url_looks_non_script(url: str) -> bool:
+    low = (url or "").lower()
+    path = urlparse(low).path
+    if any(path.endswith(ext) for ext in (
+        ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".bmp",
+        ".woff", ".woff2", ".ttf", ".eot", ".mp4", ".mp3", ".pdf",
+    )):
+        return True
+    return any(n in low for n in _NON_SCRIPT_URL_NEEDLES)
 
 
 def _merge_headers(base: dict | None, richer: dict | None) -> dict:
@@ -85,6 +166,9 @@ class BrowserLabWorker(QThread):
         load_reres: bool = True,
         load_cb_hook: bool = True,
         ext_proxy: str | None = "http://127.0.0.1:7897",
+        record_mode: bool = True,
+        browser_channel: str = "chromium",
+        real_browser: bool = False,
         parent=None,
     ):
         super().__init__(parent)
@@ -100,6 +184,22 @@ class BrowserLabWorker(QThread):
         self.load_reres = load_reres
         self.load_cb_hook = load_cb_hook
         self.ext_proxy = ext_proxy
+        self.record_mode = bool(record_mode)
+        self.browser_channel = browser_channel or "chromium"
+        self.real_browser = bool(real_browser)
+        if self.real_browser:
+            # 呜呼有头持久：不挂任何页面脚本 / 扩展 / CDP
+            self.hook_enabled = False
+            self.anti_debug = False
+            self.cdp_skip_pauses = False
+            self.load_violentmonkey = False
+            self.load_reres = False
+            self.load_cb_hook = False
+            self.inject_opts = dict(self.inject_opts)
+            self.inject_opts["rewriteResponse"] = False
+            self.record_mode = True
+            self.headless = False
+        self._ephemeral_profile: str | None = None
         self._stop_flag = False
         self._seen_flows: set[str] = set()
         self._pending_flow_idx: dict[str, int] = {}
@@ -252,25 +352,83 @@ class BrowserLabWorker(QThread):
         return False
 
     def _read_response_body(self, response, max_bytes: int = 120_000) -> str:
+        text, _kind, _raw = self._read_response_payload(response, max_bytes=max_bytes)
+        return text
+
+    def _read_response_payload(
+        self, response, max_bytes: int = 120_000
+    ) -> tuple[str, str, bytes | None]:
+        """返回 (展示正文, kind, raw_bytes)。
+
+        kind=text|binary|empty。二进制不把乱码塞进 response_body，原始字节经 raw 返回。
+        """
         try:
-            cl = response.headers.get("content-length") or response.headers.get("Content-Length")
+            headers = dict(response.headers or {})
+            ct = _header_content_type(headers)
+            cl = headers.get("content-length") or headers.get("Content-Length")
             if cl:
                 try:
-                    if int(cl) > max_bytes:
-                        return ""
+                    if int(cl) > max_bytes * 4 and (
+                        ct.startswith("image/")
+                        or "octet-stream" in ct
+                        or "font" in ct
+                    ):
+                        # 过大：仍尽量读一段原始供详情 Hex/Base64
+                        raw = response.body() or b""
+                        if len(raw) > max_bytes:
+                            raw = raw[:max_bytes]
+                        return (
+                            f"(binary · {ct or 'unknown'} · {cl} bytes，详情见 Base64/Hex)",
+                            "binary",
+                            raw or None,
+                        )
                 except ValueError:
                     pass
             raw = response.body()
             if not raw:
-                return ""
+                return "", "empty", None
             if len(raw) > max_bytes:
                 raw = raw[:max_bytes]
-            return raw.decode("utf-8", errors="replace")
+            if ct.startswith(("image/", "audio/", "video/", "font/")) or "octet-stream" in ct:
+                return (
+                    f"(binary · {ct} · {len(raw)} bytes，详情见 Base64/Hex)",
+                    "binary",
+                    raw,
+                )
+            sniffed = _sniff_binary_kind(raw)
+            if sniffed:
+                return (
+                    f"(binary · {sniffed} · {len(raw)} bytes，详情见 Base64/Hex)",
+                    "binary",
+                    raw,
+                )
+            try:
+                text = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                if _sniff_binary_kind(raw) or raw.count(0) > 4:
+                    return (
+                        f"(binary · {ct or 'unknown'} · {len(raw)} bytes，详情见 Base64/Hex)",
+                        "binary",
+                        raw,
+                    )
+                text = raw.decode("utf-8", errors="replace")
+            if text.count("\ufffd") > max(12, len(text[:2000]) // 25):
+                return (
+                    f"(binary · {ct or 'unknown'} · {len(raw)} bytes，详情见 Base64/Hex)",
+                    "binary",
+                    raw,
+                )
+            return text, "text", None
         except Exception:
-            return ""
+            return "", "empty", None
 
     def _script_url_interesting(self, url: str) -> bool:
+        if _url_looks_non_script(url):
+            return False
         low = (url or "").lower()
+        path = urlparse(low).path
+        if path.endswith((".js", ".mjs", ".cjs")):
+            return True
         return any(k in low for k in _SCRIPT_URL_KEYWORDS)
 
     def _on_console(self, msg) -> None:
@@ -283,25 +441,105 @@ class BrowserLabWorker(QThread):
         if "[debug]" in text:
             self._enqueue(("hook", text))
 
+    def _should_record_flow(self, request, response_headers: dict | None = None) -> bool:
+        """是否记入「流量」列表。图片/二进制进流量；不进 JS（由脚本采集单独过滤）。"""
+        url = request.url or ""
+        rt = (request.resource_type or "").lower()
+        ct = _header_content_type(response_headers)
+        # 纯噪音：样式/字体/媒体流/websocket — 仍跳过
+        if rt in ("stylesheet", "font", "media", "websocket", "manifest", "ping"):
+            return False
+        if ct.startswith(("font/", "text/css", "audio/", "video/")):
+            return False
+        # 图片 / 验证码二进制 → 流量
+        if rt == "image" or ct.startswith("image/") or "octet-stream" in ct:
+            return True
+        if _url_looks_non_script(url) and any(
+            n in (url or "").lower()
+            for n in (
+                "imgcode", "captcha", "verifycode", "checkcode",
+                "imagecode", "vcode",
+            )
+        ):
+            return True
+        if rt in ("xhr", "fetch"):
+            return True
+        # 主文档（HTML）始终进流量，便于看见打开了哪一页
+        if rt == "document":
+            return True
+        if self._is_api_like(request, response_headers):
+            return True
+        # 静态 .js/.css 等：除 xhr/fetch/image 外跳过（.js 走「JS」页采集）
+        if self._looks_static(url) and rt not in ("xhr", "fetch", "other", "image"):
+            return False
+        if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+            return True
+        return False
+
+    def _on_request(self, request) -> None:
+        """Playwright 请求阶段：真实浏览器模式下先占位，不依赖页面注入。"""
+        if self._stop_flag or not self.real_browser:
+            return
+        try:
+            url = request.url or ""
+            if url.startswith(("data:", "blob:", "chrome-extension:", "chrome:")):
+                return
+            if not self._should_record_flow(request):
+                return
+            try:
+                req_hdrs = dict(request.all_headers())
+            except Exception:
+                req_hdrs = dict(request.headers)
+            self._enqueue(("flow", {
+                "method": request.method,
+                "url": url,
+                "request_body": (request.post_data or "")[:200000],
+                "response_body": "",
+                "request_headers": _norm_headers(req_hdrs),
+                "response_headers": {},
+                "status": 0,
+                "source": "playwright",
+                "phase": "request",
+            }))
+        except Exception:
+            pass
+
     def _emit_script(self, url: str, content: str) -> None:
         if not url or not content or url in self._seen_scripts:
             return
         self._seen_scripts.add(url)
         self._script_count += 1
-        stored = content[:_MAX_SCRIPT_STORE]
+        try:
+            from core.script_enrich import strip_source_maps
+
+            body, removed = strip_source_maps(content)
+        except Exception:
+            body = content
+            removed = 0
+        stored = body[:_MAX_SCRIPT_STORE]
         self.script_captured.emit({
             "url": url,
             "content": stored,
-            "size": len(content),
+            "size": len(body),
+            "raw_size": len(content),
+            "sourcemap_removed": int(removed),
         })
         short = url.split("/")[-1][:50]
         note = ""
-        if len(content) > _MAX_SCRIPT_STORE:
-            note = f"，已截断存 {_MAX_SCRIPT_STORE}"
-        self.log.emit(f"JS #{self._script_count}: {short} ({len(content)} bytes{note})")
+        if removed:
+            note += f"，已剥 source map -{removed}"
+        if len(body) > _MAX_SCRIPT_STORE:
+            note += f"，已截断存 {_MAX_SCRIPT_STORE}"
+        self.log.emit(f"JS #{self._script_count}: {short} ({len(stored)} bytes{note})")
 
     def _should_capture_script(self, url: str, content: str) -> bool:
         if not content or len(content) < 80:
+            return False
+        if content.startswith("(binary"):
+            return False
+        if _url_looks_non_script(url):
+            return False
+        if not _looks_like_js_text(content):
             return False
         low = (url or "").lower()
         if any(
@@ -315,68 +553,84 @@ class BrowserLabWorker(QThread):
             )
         ):
             return False
+        path = urlparse(url).path.lower()
+        if path.endswith((".js", ".mjs", ".cjs", ".ts", ".tsx")):
+            return True
         if self._script_url_interesting(url):
             return True
-        # 同站 .js 默认收录（反调试常在 security / pack 等无关键字文件里）
-        path = urlparse(url).path.lower()
-        if path.endswith(".js") or path.endswith(".mjs"):
-            return True
-        # 文档页：含反调试或加解密痕迹才收录
         keywords = (
-            "encrypt", "decrypt", "cryptojs", "aes", "password", "cipher", "rsa",
+            "encrypt", "decrypt", "cryptojs", "aes", "cipher", "rsa",
             "debugger", "setinterval", "devtools", "console.clear", "outerwidth",
         )
         head = content[:8000].lower()
-        # 页尾 inline 反调试常见，也扫尾部
         tail = content[-12000:].lower() if len(content) > 8000 else ""
         blob = head + "\n" + tail
         return any(k in blob for k in keywords)
 
     def _on_response(self, response) -> None:
-        """Playwright 网络层：补全真实请求头；JS Hook 开启时仍抓脚本."""
+        """Playwright 网络层采集（不注入页面；真实浏览器全靠这条）。"""
         if self._stop_flag:
             return
         url = ""
         try:
             req = response.request
             url = req.url or ""
-            # 1) 脚本采集（JS Hook 开启时主要靠这条）
-            if self._js_capture_enabled:
-                try:
-                    rt = req.resource_type or ""
-                    if rt in ("script", "document") or self._script_url_interesting(url):
-                        content = self._read_response_body(response, max_bytes=_MAX_SCRIPT_READ)
-                        if content and self._should_capture_script(url, content):
-                            self._enqueue(("script", (url, content)))
-                except Exception:
-                    pass
-
-            # 2) API 流量：始终用 Playwright 头（含 Cookie/UA 等浏览器自动头）
-            if self._looks_static(url):
+            if url.startswith(("data:", "blob:", "chrome-extension:", "chrome:")):
                 return
-            resp_hdrs = dict(response.headers)
-            if not self._is_api_like(req, resp_hdrs):
+            rt = (req.resource_type or "").lower()
+            resp_hdrs = dict(response.headers or {})
+            ct = _header_content_type(resp_hdrs)
+
+            # 1) 脚本/文档：跳过图片等二进制
+            try:
+                if rt in ("image", "font", "media", "stylesheet", "websocket"):
+                    pass
+                elif ct.startswith(("image/", "audio/", "video/", "font/")):
+                    pass
+                elif _url_looks_non_script(url):
+                    pass
+                elif rt in ("script", "document") or self._script_url_interesting(url):
+                    content, kind, _raw = self._read_response_payload(
+                        response, max_bytes=_MAX_SCRIPT_READ
+                    )
+                    if kind == "text" and content and self._should_capture_script(url, content):
+                        self._enqueue(("script", (url, content)))
+            except Exception:
+                pass
+
+            # 2) 流量（含图片/二进制；原始字节存 Base64，详情可查看）
+            if not self._should_record_flow(req, resp_hdrs):
                 return
             req_body = req.post_data or ""
-            resp_body = self._read_response_body(response)
-            if not req_body.strip() and not resp_body.strip():
+            resp_body, body_kind, raw = self._read_response_payload(response)
+            if (
+                not self.real_browser
+                and body_kind != "binary"
+                and not req_body.strip()
+                and not resp_body.strip()
+            ):
                 return
-            # all_headers 比 headers 更完整（含 cookie）
             try:
                 req_hdrs = dict(req.all_headers())
             except Exception:
                 req_hdrs = dict(req.headers)
-            self._enqueue(("flow", {
+            flow = {
                 "method": req.method,
                 "url": url,
                 "request_body": req_body[:200000],
-                "response_body": resp_body[:200000],
+                "response_body": (resp_body or "")[:200000],
                 "request_headers": _norm_headers(req_hdrs),
                 "response_headers": _norm_headers(resp_hdrs),
                 "status": response.status,
                 "source": "playwright",
                 "phase": "response",
-            }))
+                "body_kind": body_kind,
+            }
+            if body_kind == "binary" and raw:
+                # 原始数据：Base64（上限约 120KB 原字节）
+                flow["response_body_b64"] = base64.b64encode(raw).decode("ascii")
+                flow["response_body_len"] = len(raw)
+            self._enqueue(("flow", flow))
         except Exception as e:
             if url:
                 self._enqueue(("log", f"捕获跳过 {url[:60]}: {type(e).__name__}"))
@@ -401,78 +655,123 @@ class BrowserLabWorker(QThread):
             return
 
         if getattr(sys, "frozen", False) and not has_bundled_chromium():
-            self.log.emit(
-                "未找到内置 Chromium（ms-playwright 目录）。\n"
-                "请使用完整绿色版包，或联系发布者重新打包。"
-            )
-            self.stopped.emit()
-            return
+            # 真实浏览器 / 本机 Chrome·Edge 不依赖内置 Chromium
+            from core.ai_config import normalize_browser_channel
 
-        if self.use_mitm_proxy:
+            ch = normalize_browser_channel(self.browser_channel)
+            if not self.real_browser and ch == "chromium":
+                self.log.emit(
+                    "未找到内置 Chromium（ms-playwright 目录）。\n"
+                    "请使用完整绿色版包，或联系发布者重新打包。"
+                )
+                self.stopped.emit()
+                return
+
+        if self.real_browser:
+            self.log.emit(
+                "真实浏览器模式：本机 Chrome/Edge，不注入页面脚本；"
+                "流量/JS 由 Playwright 网络层采集（呜呼思路）"
+            )
+        elif self.use_mitm_proxy:
             self.log.emit(f"启动浏览器（经解密端 127.0.0.1:{self.mitm_port}）…")
         else:
             self.log.emit("启动浏览器（直连 + 页面内 Hook；未走解密端代理）…")
         try:
             from core.browser_ext_manager import (
-                PROFILE_DIR,
                 consume_pending_userscript_install,
                 ensure_vendor_extensions,
                 list_extension_paths,
             )
-
-            # 扩展需 persistent context；默认拉油猴 + ReRes（可走代理下 GitHub）
-            if self.load_violentmonkey or self.load_reres:
-                ensure_vendor_extensions(
-                    want_vm=self.load_violentmonkey,
-                    want_reres=self.load_reres,
-                    proxy=self.ext_proxy,
-                    log=lambda m: self.log.emit(m),
-                )
-            ext_paths = list_extension_paths(
-                load_violentmonkey=self.load_violentmonkey,
-                load_reres=self.load_reres,
-                load_cb_hook=self.load_cb_hook,
+            from core.playwright_env import (
+                apply_launch_channel,
+                channel_label,
+                profile_dir_for_channel,
+                real_browser_channel_attempts,
             )
-            # 双保险：过滤任何 vendor/.../reres（MV2）
-            ext_paths = [
-                p for p in ext_paths
-                if not (
-                    os.path.basename(p.rstrip("\\/")).lower() == "reres"
-                    and f"{os.sep}vendor{os.sep}" in (p.replace("/", os.sep) + os.sep)
+
+            # 扩展需 persistent context；真实浏览器模式完全不加载扩展
+            if self.real_browser:
+                ext_paths = []
+            else:
+                if self.load_violentmonkey or self.load_reres:
+                    ensure_vendor_extensions(
+                        want_vm=self.load_violentmonkey,
+                        want_reres=self.load_reres,
+                        proxy=self.ext_proxy,
+                        log=lambda m: self.log.emit(m),
+                    )
+                ext_paths = list_extension_paths(
+                    load_violentmonkey=self.load_violentmonkey,
+                    load_reres=self.load_reres,
+                    load_cb_hook=self.load_cb_hook,
                 )
-            ]
-            os.makedirs(PROFILE_DIR, exist_ok=True)
-            launch_args = [
-                "--ignore-certificate-errors",
-                "--disable-web-security",
-                "--enable-extensions",
-            ]
-            if ext_paths:
-                joined = ",".join(ext_paths)
-                launch_args.append(f"--disable-extensions-except={joined}")
-                launch_args.append(f"--load-extension={joined}")
-                self.log.emit(f"将加载 {len(ext_paths)} 个扩展：")
-                for p in ext_paths:
-                    name = os.path.basename(p.rstrip("\\/"))
-                    label = {
-                        "cb_hook": "CipherBridge Hook",
-                        "violentmonkey": "暴力猴 Violentmonkey",
-                        "reres": "ReRes MV3（请求映射）",
-                    }.get(name, name)
-                    self.log.emit(f"  · {label}")
+                # 双保险：过滤任何 vendor/.../reres（MV2）
+                ext_paths = [
+                    p for p in ext_paths
+                    if not (
+                        os.path.basename(p.rstrip("\\/")).lower() == "reres"
+                        and f"{os.sep}vendor{os.sep}" in (p.replace("/", os.sep) + os.sep)
+                    )
+                ]
+
+            if self.real_browser:
+                # 呜呼：只关 AutomationControlled，不挂其它指纹/扩展参数
+                launch_args = [
+                    "--disable-blink-features=AutomationControlled",
+                    "--ignore-certificate-errors",
+                ]
+            else:
+                launch_args = [
+                    "--ignore-certificate-errors",
+                    "--enable-extensions",
+                ]
+                if ext_paths:
+                    joined = ",".join(ext_paths)
+                    launch_args.append(f"--disable-extensions-except={joined}")
+                    launch_args.append(f"--load-extension={joined}")
+                    self.log.emit(f"将加载 {len(ext_paths)} 个扩展：")
+                    for p in ext_paths:
+                        name = os.path.basename(p.rstrip("\\/"))
+                        label = {
+                            "cb_hook": "CipherBridge Hook",
+                            "violentmonkey": "暴力猴 Violentmonkey",
+                            "reres": "ReRes MV3（请求映射）",
+                        }.get(name, name)
+                        self.log.emit(f"  · {label}")
+
+            # 记录模式：固定持久 profile；关闭则临时目录（关浏览器后删除）
+            # 真实浏览器强制持久目录（呜呼 headed persistent）
+            if self.record_mode or self.real_browser:
+                user_data_dir = profile_dir_for_channel(self.browser_channel)
+                os.makedirs(user_data_dir, exist_ok=True)
+                self.log.emit(
+                    f"记录模式 · {channel_label(self.browser_channel)} → {user_data_dir}"
+                )
+            else:
+                import tempfile
+
+                user_data_dir = tempfile.mkdtemp(prefix="cb_browser_")
+                self._ephemeral_profile = user_data_dir
+                self.log.emit(
+                    f"非记录模式 · {channel_label(self.browser_channel)}（临时）→ {user_data_dir}"
+                )
 
             with sync_playwright() as p:
                 ctx_opts: dict = {
-                    "headless": bool(self.headless) and not ext_paths,
+                    "headless": False if self.real_browser else (bool(self.headless) and not ext_paths),
                     "args": launch_args,
                     "ignore_https_errors": True,
                     "viewport": None,
                 }
                 # 加载了 cb_hook 时：用扩展 chrome.proxy 控代理，便于弹窗切换；
                 # 不再写 --proxy-server（命令行代理会锁死，扩展无法改直连）。
-                use_ext_proxy = bool(self.load_cb_hook) and any(
-                    os.path.basename(p.rstrip("\\/")).lower() == "cb_hook"
-                    for p in ext_paths
+                use_ext_proxy = (
+                    not self.real_browser
+                    and bool(self.load_cb_hook)
+                    and any(
+                        os.path.basename(p.rstrip("\\/")).lower() == "cb_hook"
+                        for p in ext_paths
+                    )
                 )
                 if use_ext_proxy:
                     try:
@@ -501,7 +800,80 @@ class BrowserLabWorker(QThread):
                     launch_args.append("--proxy-bypass-list=<-loopback>")
                     ctx_opts["args"] = launch_args
                 # 扩展只能挂在 persistent context
-                context = p.chromium.launch_persistent_context(PROFILE_DIR, **ctx_opts)
+                from core.browser_stealth import (
+                    apply_stealth_to_context,
+                    apply_playwright_marker_cleanup,
+                    merge_launch_options,
+                    stealth_summary,
+                    wait_out_js_challenge_sync,
+                )
+
+                def _launch_with_channel(ch: str, udir: str):
+                    opts = dict(ctx_opts)
+                    opts = apply_launch_channel(opts, ch)
+                    if self.real_browser:
+                        # 不 merge 全套 stealth args，只保留呜呼那一条 + ignoreHTTPS
+                        opts["ignore_default_args"] = ["--enable-automation"]
+                    else:
+                        opts = merge_launch_options(opts, for_lab=True)
+                    return p.chromium.launch_persistent_context(udir, **opts)
+
+                context = None
+                if self.real_browser:
+                    last_err = None
+                    for ch in real_browser_channel_attempts(self.browser_channel):
+                        udir = profile_dir_for_channel(ch)
+                        os.makedirs(udir, exist_ok=True)
+                        try:
+                            context = _launch_with_channel(ch, udir)
+                            self.browser_channel = ch
+                            user_data_dir = udir
+                            self.log.emit(f"已用 {channel_label(ch)} 启动（真实浏览器）")
+                            break
+                        except Exception as e:
+                            last_err = e
+                            self.log.emit(f"{channel_label(ch)} 启动失败，尝试下一个… ({e})")
+                    if context is None:
+                        raise last_err or RuntimeError("真实浏览器启动失败")
+                else:
+                    self.log.emit(f"拟真环境：{stealth_summary()}")
+                    try:
+                        context = _launch_with_channel(self.browser_channel, user_data_dir)
+                    except Exception as e:
+                        if self.browser_channel and "chrome" in str(self.browser_channel).lower():
+                            self.log.emit(
+                                f"本机 Chrome 启动失败: {e}\n"
+                                "请确认已安装 Google Chrome，或改回「Chromium（内置）」。"
+                            )
+                        raise
+                try:
+                    if not self.real_browser:
+                        apply_stealth_to_context(context)
+                        # 站点早期补丁必须赶在页面脚本 / expose_binding 之前
+                        # （扩展 bootstrap 是 async，赶不上 fpscanner 等同步 CDP 检测）
+                        if self.load_cb_hook:
+                            from core.browser_ext_manager import SITE_EARLY_HOOK_PATH
+
+                            if os.path.isfile(SITE_EARLY_HOOK_PATH):
+                                with open(SITE_EARLY_HOOK_PATH, encoding="utf-8") as f:
+                                    context.add_init_script(f.read())
+                                self.log.emit(
+                                    "已注入站点早期补丁 site_early_hook.js（init_script）"
+                                )
+                    # 与「反调试」勾选绑定：中和页面反 DevTools（防闪一下变 about:blank）
+                    if self.anti_debug:
+                        from core.disable_devtool_guard import (
+                            DISABLE_DEVTOOL_GUARD_JS,
+                            install_disable_devtool_routes,
+                        )
+
+                        context.add_init_script(DISABLE_DEVTOOL_GUARD_JS)
+                        install_disable_devtool_routes(
+                            context, log=lambda m: self.log.emit(m)
+                        )
+                        self.log.emit("已启用反 DevTools 中和（随「反调试」开启）")
+                except Exception as e:
+                    self.log.emit(f"拟真脚本注入提示: {e}")
 
                 # 反调试须最先注入，抢在业务 JS 之前；选项可按站点勾选
                 if self.anti_debug and os.path.isfile(ANTI_DEBUG_SCRIPT):
@@ -512,7 +884,8 @@ class BrowserLabWorker(QThread):
                     on_flags = ",".join(k for k, v in self.inject_opts.items() if v) or "(默认)"
                     self.log.emit(f"已注入 anti_debug.js（模块: {on_flags}）")
 
-                if os.path.isfile(NETWORK_CAPTURE_SCRIPT):
+                # 真实浏览器：不注入 network_capture（瑞数等挑战会识别）
+                if (not self.real_browser) and os.path.isfile(NETWORK_CAPTURE_SCRIPT):
                     context.expose_binding("cpCapture", self._handle_js_capture)
                     with open(NETWORK_CAPTURE_SCRIPT, encoding="utf-8") as f:
                         context.add_init_script(f.read())
@@ -523,6 +896,13 @@ class BrowserLabWorker(QThread):
                     with open(HOOK_SCRIPT, encoding="utf-8") as f:
                         context.add_init_script(f.read())
                     self.log.emit("已注入 crypto_hook.js — 触发加密后显示密钥")
+
+                # 所有 init / expose_binding 之后再清 Playwright 全局标记（抗 hasPlaywright）
+                if not self.real_browser:
+                    try:
+                        apply_playwright_marker_cleanup(context)
+                    except Exception as e:
+                        self.log.emit(f"Playwright 标记清理提示: {e}")
 
                 # 响应改写：字面量 debugger → return（打断递归）；空 while(true){} 剔除
                 rewrite_on = bool(self.inject_opts.get("rewriteResponse", True))
@@ -589,7 +969,12 @@ class BrowserLabWorker(QThread):
                     self.log.emit("已开启响应改写：debugger→return（治字面量+递归）")
 
                 context.on("response", self._on_response)
+                context.on("request", self._on_request)
                 context.on("console", self._on_console)
+                if self.real_browser:
+                    self.log.emit(
+                        "已挂 Playwright 网络监听（不注入页面脚本，流量/JS 从浏览器层采集）"
+                    )
 
                 page = context.pages[0] if context.pages else context.new_page()
                 if self.anti_debug and self.cdp_skip_pauses:
@@ -661,6 +1046,10 @@ class BrowserLabWorker(QThread):
                 target = self.url if self.url.startswith("http") else f"https://{self.url}"
                 self.log.emit(f"打开: {target}")
                 page.goto(target, wait_until="domcontentloaded", timeout=60000)
+                wait_out_js_challenge_sync(
+                    page,
+                    log=lambda m: self.log.emit(m),
+                )
                 self.log.emit("页面已打开；API 请求会立即出现在左侧列表")
 
                 while not self._stop_flag:
@@ -671,6 +1060,17 @@ class BrowserLabWorker(QThread):
                 context.close()
         except Exception as e:
             self.log.emit(f"浏览器错误: {e}")
+        finally:
+            ephem = self._ephemeral_profile
+            self._ephemeral_profile = None
+            if ephem:
+                try:
+                    import shutil
+
+                    shutil.rmtree(ephem, ignore_errors=True)
+                    self.log.emit("已清理临时 Profile")
+                except Exception:
+                    pass
         self.log.emit(
             f"浏览器已关闭（流量 {self._capture_count} 条，JS {self._script_count} 个）"
         )

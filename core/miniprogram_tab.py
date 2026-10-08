@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QPlainTextEdit, QFileDialog, QMessageBox, QCheckBox, QSpinBox,
     QListWidget, QListWidgetItem, QFrame, QTabWidget, QLineEdit,
-    QDialog, QDialogButtonBox, QFormLayout,
+    QDialog, QDialogButtonBox, QFormLayout, QSplitter, QAbstractSpinBox,
 )
 
 from core.theme import style_button, style_muted_label, style_sidebar_aux_button, setup_sub_tabs, C
@@ -56,13 +56,13 @@ class _DecompileWorker(QThread):
             self.failed.emit(f"未预期错误: {e}")
 
 
-def _placeholder_icon(size: int = 40) -> QPixmap:
+def _placeholder_icon(size: int = 22) -> QPixmap:
     pm = QPixmap(size, size)
     pm.fill(QColor(C.get("surface2", "#3c3c3c")))
     painter = QPainter(pm)
     painter.setPen(QColor(C.get("text_dim", "#999")))
     font = QFont()
-    font.setPointSize(11)
+    font.setPointSize(8)
     font.setBold(True)
     painter.setFont(font)
     painter.drawText(pm.rect(), Qt.AlignmentFlag.AlignCenter, "小")
@@ -70,7 +70,7 @@ def _placeholder_icon(size: int = 40) -> QPixmap:
     return pm
 
 
-def _load_avatar(path: str, size: int = 40) -> QPixmap:
+def _load_avatar(path: str, size: int = 22) -> QPixmap:
     if path and os.path.isfile(path):
         pm = QPixmap(path)
         if not pm.isNull():
@@ -83,56 +83,49 @@ def _load_avatar(path: str, size: int = 40) -> QPixmap:
 
 
 class _AppRow(QFrame):
-    """单行：头像 | 名称+AppID | 解包按钮."""
+    """单行紧凑：头像 | 名称 · N个包 | 解包（多显几条）."""
 
     unpack_clicked = pyqtSignal(object)
+    ROW_H = 32
 
     def __init__(self, info: MiniprogramInfo, parent=None):
         super().__init__(parent)
         self.info = info
         self.setObjectName("miniAppRow")
         self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setFixedHeight(self.ROW_H)
         self.setStyleSheet(
             f"QFrame#miniAppRow {{ background: transparent; }}"
             f"QFrame#miniAppRow QLabel {{ background: transparent; }}"
+            f"QFrame#miniAppRow QLabel#miniAppName {{"
+            f" font-weight: 600; font-size: 12px;"
+            f" color: {C.get('text', '#e8eaed')}; }}"
         )
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 6, 8, 6)
-        layout.setSpacing(10)
+        layout.setContentsMargins(4, 1, 4, 1)
+        layout.setSpacing(6)
 
         avatar = QLabel()
-        avatar.setFixedSize(42, 42)
-        avatar.setPixmap(_load_avatar(info.icon_path, 42))
-        avatar.setStyleSheet("border-radius: 6px; background: transparent;")
+        avatar.setFixedSize(22, 22)
+        avatar.setPixmap(_load_avatar(info.icon_path, 22))
+        avatar.setStyleSheet("border-radius: 3px; background: transparent;")
         layout.addWidget(avatar)
 
-        text_col = QVBoxLayout()
-        text_col.setSpacing(2)
         tip = f"{info.display_name}\n{info.appid}\n{info.path}"
-        name = QLabel(info.display_name)
-        # 勿用 color:inherit — 在 QListWidget 子控件里常变成黑色
-        name.setStyleSheet(
-            f"font-weight: 600; background: transparent; color: {C.get('text', '#e8eaed')};"
-        )
+        name = QLabel(f"{info.display_name}  ·  {info.pkg_count} 个包")
+        name.setObjectName("miniAppName")
         name.setToolTip(tip)
-        text_col.addWidget(name)
-        sub = QLabel(f"{info.appid}  ·  {info.pkg_count} 个包")
-        style_muted_label(sub)
-        sub.setStyleSheet(
-            f"color: {C.get('text_dim', '#8b929e')}; background: transparent; font-size: 12px;"
-        )
-        sub.setToolTip(tip)
-        text_col.addWidget(sub)
-        layout.addLayout(text_col, 1)
+        layout.addWidget(name, 1)
 
         self.setToolTip(tip)
         avatar.setToolTip(tip)
 
         btn = QPushButton("解包")
         btn.setToolTip("解密并解包此小程序")
-        btn.setFixedWidth(64)
+        btn.setFixedWidth(48)
+        btn.setFixedHeight(24)
         style_button(btn, "default", size="sm")
-        set_btn_icon(btn, "unlock", size=14)
+        set_btn_icon(btn, "unlock", size=11)
         btn.clicked.connect(lambda: self.unpack_clicked.emit(self.info))
         layout.addWidget(btn)
 
@@ -145,6 +138,7 @@ class MiniprogramPanel(QWidget):
     flow_captured = pyqtSignal(dict)
     flow_updated = pyqtSignal(dict)
     flow_selected = pyqtSignal(dict)
+    script_preview = pyqtSignal(str, str)  # label, content → 右侧详情
     capture_log = pyqtSignal(str)
 
     def __init__(self, parent=None, *, compact: bool = True):
@@ -165,37 +159,35 @@ class MiniprogramPanel(QWidget):
         layout = QVBoxLayout(self)
         m = 0 if self._compact else 8
         layout.setContentsMargins(m, m, m, m)
-        layout.setSpacing(8)
+        layout.setSpacing(6)
 
-        # —— 抓包（可选） ——
-        cap_title = QLabel("抓包（可选）")
-        cap_title.setObjectName("homeSectionTitle")
-        layout.addWidget(cap_title)
+        # —— 抓包栏：端口 | 代理/过滤 | 启动 ——
+        cap_bar = QFrame()
+        cap_bar.setObjectName("miniCaptureBar")
+        cap = QHBoxLayout(cap_bar)
+        cap.setContentsMargins(0, 0, 0, 0)
+        cap.setSpacing(10)
 
-        cap = QHBoxLayout()
-        cap.setSpacing(8)
-        self.capture_btn = QPushButton("启动抓包")
-        self.capture_btn.setToolTip(
-            "mitm 代理抓小程序 HTTPS（需在「设置」安装证书）"
-        )
-        self.capture_btn.clicked.connect(self._toggle_capture)
-        style_button(self.capture_btn, "primary", size="sm")
-        set_btn_icon(self.capture_btn, "play", size=14)
-        cap.addWidget(self.capture_btn)
+        port_chip = QFrame()
+        port_chip.setObjectName("miniPortChip")
+        port_chip.setToolTip("抓包监听端口")
+        port_lay = QHBoxLayout(port_chip)
+        port_lay.setContentsMargins(10, 0, 6, 0)
+        port_lay.setSpacing(4)
         port_lbl = QLabel("端口")
-        port_lbl.setObjectName("proxyFieldLabel")
-        cap.addWidget(port_lbl)
+        port_lbl.setObjectName("miniPortLabel")
+        port_lay.addWidget(port_lbl)
         self.capture_port = QSpinBox()
+        self.capture_port.setObjectName("miniCapturePort")
         self.capture_port.setRange(1024, 65535)
         self.capture_port.setValue(DEFAULT_PORT)
-        self.capture_port.setFixedWidth(86)
+        self.capture_port.setFixedWidth(72)
+        self.capture_port.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.capture_port.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
         self.capture_port.setToolTip("抓包端口")
-        cap.addWidget(self.capture_port)
-        cap.addStretch(1)
-        layout.addLayout(cap)
+        port_lay.addWidget(self.capture_port)
+        cap.addWidget(port_chip)
 
-        opt_row = QHBoxLayout()
-        opt_row.setSpacing(8)
         self.sys_proxy_check = QCheckBox("系统代理")
         self.sys_proxy_check.setChecked(system_proxy_supported())
         self.sys_proxy_check.setEnabled(system_proxy_supported())
@@ -204,23 +196,57 @@ class MiniprogramPanel(QWidget):
             "停止抓包或关闭软件会自动恢复代理。"
             "AI API 域名已默认直连；若无流量请完全退出微信后重开"
         )
-        opt_row.addWidget(self.sys_proxy_check)
+        cap.addWidget(self.sys_proxy_check)
 
-        # 屏蔽噪音：一键开关；过滤关键字收到弹窗里，避免占行
         self.noise_check = QCheckBox("屏蔽噪音")
         self.noise_check.setChecked(True)
         self.noise_check.setToolTip(
             "忽略 Windows/微软/谷歌/苹果等系统与广告域名。改域名关键字请点「过滤…」"
         )
         self.noise_check.toggled.connect(self._on_noise_toggled)
-        opt_row.addWidget(self.noise_check)
+        cap.addWidget(self.noise_check)
 
         self.filter_btn = QPushButton("过滤…")
         self.filter_btn.setToolTip("设置只保留哪些域名/关键字（弹窗编辑，确定后收起）")
         self.filter_btn.clicked.connect(self._open_filter_dialog)
         style_button(self.filter_btn, "ghost", size="sm")
-        opt_row.addWidget(self.filter_btn)
+        cap.addWidget(self.filter_btn)
+
+        cap.addStretch(1)
+
+        self.capture_btn = QPushButton("启动抓包")
+        self.capture_btn.setObjectName("miniCaptureBtn")
+        self.capture_btn.setToolTip(
+            "mitm 代理抓小程序 HTTPS（需在「设置」安装证书）"
+        )
+        self.capture_btn.clicked.connect(self._toggle_capture)
+        self.capture_btn.setMinimumWidth(104)
+        style_button(self.capture_btn, "primary", size="sm")
+        set_btn_icon(self.capture_btn, "play", size=14)
+        cap.addWidget(self.capture_btn)
+        layout.addWidget(cap_bar)
+
+        # 工具一行：刷新 / 目录 / 输出
+        opt_row = QHBoxLayout()
+        opt_row.setSpacing(6)
         opt_row.addStretch(1)
+
+        self.refresh_btn = QPushButton("刷新")
+        self.refresh_btn.clicked.connect(self.refresh_list)
+        style_button(self.refresh_btn, "ghost", size="sm")
+        set_btn_icon(self.refresh_btn, "refresh", size=14)
+        opt_row.addWidget(self.refresh_btn)
+        add_btn = QPushButton("目录")
+        add_btn.setToolTip("手动添加含 wx***** 的包根目录")
+        add_btn.clicked.connect(self._add_root)
+        style_button(add_btn, "ghost", size="sm")
+        opt_row.addWidget(add_btn)
+        self.open_btn = QPushButton("输出")
+        self.open_btn.setToolTip("打开解包输出目录")
+        self.open_btn.clicked.connect(self._open_out)
+        self.open_btn.setEnabled(False)
+        style_button(self.open_btn, "ghost", size="sm")
+        opt_row.addWidget(self.open_btn)
         layout.addLayout(opt_row)
 
         # 隐藏字段：逻辑仍走同一套 filter API，界面不常驻占位
@@ -229,44 +255,33 @@ class MiniprogramPanel(QWidget):
         self.filter_edit.setPlaceholderText("过滤：域名/关键字，逗号分隔；留空=全部")
         self._refresh_filter_btn()
 
-        # —— 解包列表（主操作） ——
-        list_head = QHBoxLayout()
+        # 上：小程序列表；下：流量/候选 JS/日志 — 可拖动分隔
+        list_panel = QWidget()
+        list_lay = QVBoxLayout(list_panel)
+        list_lay.setContentsMargins(0, 0, 0, 0)
+        list_lay.setSpacing(4)
+
         self.list_label = QLabel("解包本机小程序")
         self.list_label.setObjectName("homeSectionTitle")
-        list_head.addWidget(self.list_label, 1)
-        self.refresh_btn = QPushButton("刷新")
-        self.refresh_btn.clicked.connect(self.refresh_list)
-        style_button(self.refresh_btn, "ghost", size="sm")
-        set_btn_icon(self.refresh_btn, "refresh", size=14)
-        list_head.addWidget(self.refresh_btn)
-        add_btn = QPushButton("目录")
-        add_btn.setToolTip("手动添加含 wx***** 的包根目录")
-        add_btn.clicked.connect(self._add_root)
-        style_button(add_btn, "ghost", size="sm")
-        list_head.addWidget(add_btn)
-        self.open_btn = QPushButton("输出")
-        self.open_btn.setToolTip("打开解包输出目录")
-        self.open_btn.clicked.connect(self._open_out)
-        self.open_btn.setEnabled(False)
-        style_button(self.open_btn, "ghost", size="sm")
-        list_head.addWidget(self.open_btn)
-        layout.addLayout(list_head)
+        list_lay.addWidget(self.list_label)
 
-        self.status = QLabel("点右侧「解包」即可反编译；建议再抓包，识别更准。")
+        self.status = QLabel("")
         self.status.setWordWrap(True)
+        self.status.hide()
         style_muted_label(self.status)
-        layout.addWidget(self.status)
+        list_lay.addWidget(self.status)
 
         self.app_list = QListWidget()
-        self.app_list.setSpacing(4)
-        self.app_list.setUniformItemSizes(False)
+        self.app_list.setSpacing(1)
+        self.app_list.setUniformItemSizes(True)
+        self.app_list.setMinimumHeight(80)
         self.app_list.setStyleSheet(
             f"QListWidget {{ color: {C.get('text', '#e8eaed')}; background: {C.get('input_bg', '#171a1f')}; }}"
             f"QListWidget::item {{ padding: 0; margin: 0; border: none; background: transparent; color: {C.get('text', '#e8eaed')}; }}"
             f"QListWidget::item:selected {{ background: {C.get('selection', '#3a5068')}; }}"
             f"QListWidget::item:hover {{ background: {C.get('surface2', '#30363f')}; }}"
         )
-        layout.addWidget(self.app_list, 1)
+        list_lay.addWidget(self.app_list, 1)
 
         detail_tabs = QTabWidget()
         setup_sub_tabs(detail_tabs)
@@ -277,22 +292,23 @@ class MiniprogramPanel(QWidget):
         self.hit_list = QListWidget()
         self.hit_list.itemClicked.connect(self._preview_hit)
         detail_tabs.addTab(self.hit_list, "候选 JS")
-        self.preview = QPlainTextEdit()
-        self.preview.setReadOnly(True)
-        self.preview.setPlaceholderText("点「候选 JS」预览")
-        detail_tabs.addTab(self.preview, "预览")
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumBlockCount(1500)
         self.log_view.setPlaceholderText("解包 / 抓包日志")
         detail_tabs.addTab(self.log_view, "日志")
-        detail_tabs.setMinimumHeight(250)
-        layout.addWidget(detail_tabs)
+        detail_tabs.setMinimumHeight(100)
 
-        tip = QLabel("解包/抓包完成后，到右侧 Agent 页识别或生成代理")
-        style_muted_label(tip)
-        tip.setWordWrap(True)
-        layout.addWidget(tip)
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        splitter.setObjectName("miniDetailSplit")
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(6)
+        splitter.addWidget(list_panel)
+        splitter.addWidget(detail_tabs)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+        splitter.setSizes([320, 220])
+        layout.addWidget(splitter, 1)
 
     def _log(self, text: str):
         self.log_view.appendPlainText(text)
@@ -306,17 +322,21 @@ class MiniprogramPanel(QWidget):
             self._extra_roots.append(path)
         self.refresh_list()
 
+    def _set_status(self, text: str) -> None:
+        """状态行：有内容才显示，避免常驻占位文案。"""
+        text = (text or "").strip()
+        self.status.setText(text)
+        self.status.setVisible(bool(text))
+
     def refresh_list(self):
         self.app_list.clear()
-        self.status.setText("正在扫描小程序…")
+        self._set_status("正在扫描小程序…")
         from core.wxapkg import default_package_roots
         roots = list(default_package_roots()) + list(self._extra_roots)
         self._apps = discover_miniprograms(self._extra_roots or None)
         if not self._apps:
             self.list_label.setText("解包本机小程序（未找到）")
-            self.status.setText(
-                "未找到包：请先在微信打开目标小程序，再点「刷新」"
-            )
+            self._set_status("未找到包：请先在微信打开目标小程序，再点「刷新」")
             self._log("扫描目录:")
             for r in roots:
                 self._log(f"  - {r}")
@@ -329,10 +349,10 @@ class MiniprogramPanel(QWidget):
             item = QListWidgetItem(self.app_list)
             row = _AppRow(info)
             row.unpack_clicked.connect(self._start_decompile)
-            item.setSizeHint(row.sizeHint().expandedTo(QSize(100, 56)))
+            item.setSizeHint(QSize(100, _AppRow.ROW_H))
             self.app_list.addItem(item)
             self.app_list.setItemWidget(item, row)
-        self.status.setText(f"已扫描 {len(self._apps)} 个 — 点「解包」反编译，建议配合抓包")
+        self._set_status("")
         self._log(f"刷新列表: {len(self._apps)} 个")
 
     def _set_rows_enabled(self, enabled: bool):
@@ -347,10 +367,9 @@ class MiniprogramPanel(QWidget):
         self._set_rows_enabled(False)
         self.open_btn.setEnabled(False)
         self.hit_list.clear()
-        self.preview.clear()
         self.log_view.clear()
         title = info.display_name
-        self.status.setText(f"正在解包 {title}…")
+        self._set_status(f"正在解包 {title}…")
         self._log(f"解包: {title} ({info.appid})")
         self._log(f"路径: {info.path}")
         self._log(f"包数量: {info.pkg_count}")
@@ -366,7 +385,7 @@ class MiniprogramPanel(QWidget):
         self._set_rows_enabled(True)
         self._last_result = result
         self.open_btn.setEnabled(True)
-        self.status.setText(f"解包完成 → {result.out_dir}")
+        self._set_status(f"解包完成 → {result.out_dir}")
         self._log(f"输出: {result.out_dir}")
         self.hit_list.clear()
         for h in result.crypto_hits:
@@ -394,14 +413,14 @@ class MiniprogramPanel(QWidget):
                     # 重建该行以刷新名称
                     new_row = _AppRow(info)
                     new_row.unpack_clicked.connect(self._start_decompile)
-                    item.setSizeHint(new_row.sizeHint().expandedTo(QSize(100, 56)))
+                    item.setSizeHint(QSize(100, _AppRow.ROW_H))
                     self.app_list.setItemWidget(item, new_row)
             break
 
     def _on_fail(self, err: str):
         self._busy = False
         self._set_rows_enabled(True)
-        self.status.setText("解包失败")
+        self._set_status("解包失败")
         self._log(f"错误: {err}")
         QMessageBox.critical(self, "解包失败", err)
 
@@ -409,12 +428,13 @@ class MiniprogramPanel(QWidget):
         path = item.data(Qt.ItemDataRole.UserRole)
         if not path or not os.path.isfile(path):
             return
+        label = (item.text() or "").strip() or path
         try:
             with open(path, "r", encoding="utf-8", errors="ignore") as f:
                 text = f.read(80_000)
-            self.preview.setPlainText(text)
         except OSError as e:
-            self.preview.setPlainText(str(e))
+            text = str(e)
+        self.script_preview.emit(label, text)
 
     def _open_out(self):
         if not self._last_result:
@@ -487,7 +507,7 @@ class MiniprogramPanel(QWidget):
         self._on_filter_changed()
         # 首次勾选时若还没设过关键字，轻提示可点「过滤…」细调（不强制弹窗）
         if checked and not self._host_filter_text().strip():
-            self.status.setText("已开屏蔽噪音 · 要只留业务域名可点「过滤…」")
+            self._set_status("已开屏蔽噪音 · 要只留业务域名可点「过滤…」")
 
     def _open_filter_dialog(self) -> None:
         dlg = QDialog(self)
@@ -543,10 +563,10 @@ class MiniprogramPanel(QWidget):
         self._refresh_filter_btn()
         self._on_filter_changed()
         if new_filt:
-            self.status.setText(f"过滤已更新 · 仅保留含「{new_filt[:40]}」的流量")
+            self._set_status(f"过滤已更新 · 仅保留含「{new_filt[:40]}」的流量")
             self._log(f"过滤关键字: {new_filt}")
         else:
-            self.status.setText(
+            self._set_status(
                 "过滤已更新 · 不限制域名"
                 + (" · 屏蔽噪音开" if noise.isChecked() else " · 屏蔽噪音关")
             )
@@ -592,11 +612,11 @@ class MiniprogramPanel(QWidget):
 
     def _on_capture_started(self, port: int):
         self.capture_btn.setText("停止抓包")
-        style_button(self.capture_btn, "danger")
+        style_button(self.capture_btn, "danger", size="sm")
         set_btn_icon(self.capture_btn, "stop", size=14)
         self.capture_port.setEnabled(False)
         self.sys_proxy_check.setEnabled(False)
-        self.status.setText(f"抓包中 :{port} — 请打开微信小程序操作")
+        self._set_status(f"抓包中 :{port} — 请打开微信小程序操作")
         self._log(f"抓包已启动 127.0.0.1:{port}")
         filt = self._host_filter_text().strip()
         if filt:
@@ -610,11 +630,11 @@ class MiniprogramPanel(QWidget):
 
     def _on_capture_stopped(self):
         self.capture_btn.setText("启动抓包")
-        style_button(self.capture_btn, "primary")
+        style_button(self.capture_btn, "primary", size="sm")
         set_btn_icon(self.capture_btn, "play", size=14)
         self.capture_port.setEnabled(True)
         self.sys_proxy_check.setEnabled(system_proxy_supported())
-        self.status.setText(f"抓包已停止 · 本页流量 {self._local_flow_count} 条")
+        self._set_status(f"抓包已停止 · 本页流量 {self._local_flow_count} 条")
 
     def _on_capture_failed(self, err: str):
         self._log(f"抓包失败: {err}")
@@ -643,7 +663,7 @@ class MiniprogramPanel(QWidget):
         item.setData(Qt.ItemDataRole.UserRole, idx)
         self.flow_list.addItem(item)
         self.flow_captured.emit(flow)
-        self.status.setText(f"抓包中 · 已采 {self._local_flow_count} 条")
+        self._set_status(f"抓包中 · 已采 {self._local_flow_count} 条")
 
     def _on_capture_flow_updated(self, flow: dict):
         idx = flow.get("_index")

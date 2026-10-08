@@ -2,7 +2,7 @@
 
 APP_NAME = "密桥"
 APP_NAME_EN = "CipherBridge"
-APP_VERSION = "V4.1"
+APP_VERSION = "V6.0"
 APP_TITLE = f"{APP_NAME} {APP_NAME_EN} {APP_VERSION}"
 APP_SUBTITLE = "可视化加解密代理工具"
 APP_CREDIT_ORG = ""

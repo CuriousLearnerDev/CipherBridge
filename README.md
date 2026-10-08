@@ -2,7 +2,7 @@
 
 面向 APP / Web 加解密逆向分析、渗透测试人员的可视化解密框架。
 
-作者：**W啥都学** · 当前版本 **V5.0**
+作者：**W啥都学** · 当前版本 **V4.1**
 
 ## ✨ 为什么选择 CipherBridge？
 
@@ -18,7 +18,24 @@
 
 的代理链，让你在 Burp 里改明文，两端自动加解密。
 
-## 🌉 5.0 版本（2026.8.22）
+## 🌉 6.0 版本（2026.10）
+
+- **AI 浏览器绕过 Agent**
+  独立AI 绕过（Bot/挑战）窗口，通用浏览器 Agent 实时通关，也可离线分析补丁
+
+- **浏览器拟真底座**
+  UA / locale / 时区、隐藏 webdriver、JS 挑战重试等，采集时更接近真实 Chrome
+
+- **反 DevTools 可开关**
+  通用中和 DisableDevtool 等（防闪一下变 about:blank），和反调试注入一起可开关，不绑死某个测站
+
+- **加解密自动验证 + AI 修正循环**
+  生成后对采样流量试算；失败回灌 AI 修正步骤，最多约 5 轮
+
+- **混合加密识别增强**
+  AI 更稳地识别 AES+RSA / 会话密钥等混合方案（不只固定对称密钥）
+
+## 🌉5.0 版本（2026.8.22）
 
 - **界面抛光**：主 Tab / AI 实验室分段胶囊、采集栏与 Agent 输入区圆角条、彩色自定义图标（解析器 / 构建器 / 浏览器）
 - **Bypass Hook**：把选定加密 / 哈希路径改成恒等，使明文进 Burp，再一键「生成加密」
@@ -58,14 +75,14 @@
 - 🧪 内置加解密测试与编码识别（Base64 / Hex / JWT 等）
 - 📦 项目导入导出（`.cbproj.zip`）
 - 🎨 深色 / 浅色主题
-- 🖥️ PyQt 桌面版 + Vue/Electron 网页版
+- 🖥️ PyQt 桌面版
+- 🔌 MCP Server：外部智能体可查询项目 / 试算加解密
 - 🌍 支持 Windows / macOS / Linux
 
 ## 环境要求
 
 - Python 3.10+
 - Windows / macOS / Linux
-- （可选）Node.js 18+：仅 Vue/Electron 网页版需要
 - （可选）JDK：仅自行编译 `burp_ext` 时需要
 
 ## 安装
@@ -82,101 +99,138 @@ playwright install chromium
 python gui.py
 ```
 
+### MCP Server（可选，给其他智能体用）
+
+```bash
+pip install "mcp>=1.26,<2" attrs
+python -m mcp_server
+```
+
+ 配置与工具列表见 [`mcp_server/README.md`](mcp_server/README.md)
+
 ## 代理拓扑
 
 ![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/e2f83ef5-edda-4dbf-a8f0-cf24bbc920a1.png)
 
 > 解密端收到密文，解密后交给 Burp；Burp 改完请求后由加密端重新加密发出。  
 > 若只需单向解密调试，可只启动解密端。  
-> 左侧「打开代理浏览器」可经解密端端口打开 Chromium；AI「网页」启动浏览器时也可自动接入解密端。
+> 左侧「打开代理浏览器」可经解密端端口打开 Chromium；AI「网页」启动浏览器时也可自动接入解密端
+
+通过AI 生成的代码，然后浏览器走密桥会解密，然后burp在设置上游代理在走密桥会加密发送给服务器
+
+![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/11a692ec6c18111830149fe1a79d3605.png)
 
 ## 📸 界面预览
 
 ### 首页
 
-![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20260819083421863.png)
+![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20261008165927261.png)
 
 ### AI 自动化分析
 
 点击「启动」后会打开浏览器，自动采集页面 JS 以及请求/响应数据，并尝试按内置规则匹配加解密方式。若规则未匹配成功，可使用 AI 辅助分析。
 
-## 网页端测试逆向
+支持前端多种模式绕过前端检测
 
-![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20260819091046096.png)
+![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/214825548bf48b1ceed5eb6291403c92.png)
 
-![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20260819091010938.png)
+可以选择HOOK功能绕过检测
 
-![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20260819090510133.png)
+![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/d96a171f9962c8ab2892bfd35d138cc3.png)
 
-![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20260819090715302.png)
+点击加分析加解密可以点击选择要加解密的字符指定分析大大减少分析偏移的问题
+
+![image-20261008171443260](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20261008171443260.png)
+
+![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/6bdabe1ae27017230ae7461a21301ea0.png)
+
+支持ai分析上下文查看
+![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/ae3eaa243aa6fe1fa3fbfa805fb49143.png)
+
+分析完成后会自动检测是否分析加解密正确
+
+![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/1658424ee69c1a5f4af9fc471542e9d2.png)
+
+可以点击继续生成加解密代理代码
+
+![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20261008171607904.png)
+
+生成出来的代理代码支持右键请求数据包转移到请求解析器里面测试查看加解密的问题
+
+![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/0dd48f43ee0500572d733691b4929dbe.png)
+
+支持多个AI 智能体分析检测功能
+
+![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/97d79aa96f9d2bca3eb29c80afa4465c.png)
+
+可以定位到加解密的代码位置
+
+![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/6a21b1adcd26a1bbdff10c8b30defcf5.png)
+
+支持ai绕过前端检测
+
+![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20261008171752115.png)
 
 
 
-可以手动选择加解密的字段
+可以在密桥里面直接打开浏览器设置浏览器挂载的位置
 
-![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20260819090601885.png)
+![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20261008170630668.png)
 
-可以速定位到加解密位置
+![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/7b027ac9bf1bfe8eec68b5f896e003d5.png)
+可以直接走密桥加密或者解密转发到burp上
 
-![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20260819091311885.png)
-
-测试生成的代码
-
-![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20260819091418036.png)
-
-也可以手动构建
-
-![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20260819091641625.png)
-
-
+![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/11a692ec6c18111830149fe1a79d3605.png)
 
 > 点击左侧流量列表时，请求/响应详情显示在「请求/响应」Tab，不会覆盖 AI 分析结果。
 
-**Bypass Hook（4.1）**：当加密函数可 Hook 时，可让选定字段以明文进入 Burp，便于改包；确认链路后再「生成加密」写回加密端插件
-
-
+**Bypass Hook（4.1）**：当加密函数可 Hook 时，可让选定字段以明文进入 Burp，便于改包；确认链路后再「生成加密」写回加密端插件。
 
 ### 请求解析器
 
-粘贴请求/响应报文后点击「解析」，再点击需要解密的密文字段：
+可以直接右键叫请求流量放到解析器里面
 
-![image-20260819091615993](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20260819091615993.png)
+![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20261008170859269.png)
+
+![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20261008170942322.png)
+
+选择解密方式并填写密钥等参数：
+
+![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20261008171019098.png)
+
+填写好后会自动生成代码，然后可以点击整个的代码测试查看结果
+
+![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20261008171829015.png)
 
 ### 可视化构建器
 
 无需粘贴报文，可直接通过步骤列表构建加解密流程，并提供多个案例模板：
 
-![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20260819091754520.png)
+![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20261008172047500.png)
+
+会自动生成模式然后自己添加要加解密的字段
+
+![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20261008172124989.png)
 
 ### 插件编辑器
 
 部分接口逻辑较复杂（如字符串反转、前后缀拼接、每次请求远程服务器获取签名字段等），可通过「插件编辑器」编写自定义 Python 函数：
 
-![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20260822102410061.png)
+![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20261008172154710.png)
 
 编写并保存的扩展函数，可在配置加解密步骤时从下拉列表中选择调用：
 
-![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20260822102437542.png)
+![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20261008172224329.png)
 
 ### 加密分析
 
 自动识别数据可能的编码类型（Base64 / Hex / JWT 等），基于本地规则匹配：
 
-![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20260822102158051.png)
-
-![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20260822102231890.png)
-
-### 支持浏览器快速切换代理加解密
-
-![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20260822104544364.png)
-
-
+![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20261008172306696.png)
 
 ### Burp 扩展
 
-源码在 `burp_ext/`，可用 `python burp_ext/build.py` 编译。预编译 JAR 说明见 `tools/burp/`（体积较大，仓库不附带 jar，需本机构建或按说明放置）
-
-![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20260822104334011.png)
+源码在 `burp_ext/`，可用 `python burp_ext/build.py` 编译。预编译 JAR 说明见 `tools/burp/`（体积较大，仓库不附带 jar，需本机构建或按说明放置）。
 
 典型能力：
 
@@ -205,22 +259,20 @@ plugins/{name}/
 | `plugin.py` | 加解密插件代码 |
 | `state.json` | 可视化步骤（可选，有则包含） |
 
-![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20260822105842074.png)
+![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20261008172329291.png)
 
 ## HTTPS 证书
 
 解密 HTTPS 流量需要信任 mitmproxy 根证书：
 
-![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20260822105917089.png)
-
 1. 左侧解密端区域查看证书状态
-2. 点击HTTPS 证书或设置→安装 HTTPS 证书
+2. 点击「HTTPS 证书」或「设置」→「安装 HTTPS 证书」
 3. Windows 支持一键安装；macOS / Linux 会打开证书文件，需手动导入系统信任
 4. 重启浏览器后访问 `https://mitm.it` 验证
 
 ## 加载方式
 
-设置中可选择 mitmdump 加载方式：
+「设置」中可选择 mitmdump 加载方式：
 
 | 模式 | 说明 |
 |------|------|
@@ -258,7 +310,7 @@ extensions/            # 自定义扩展（可在构建器中选用）
 core/                  # 主题、项目 IO、证书、AI、浏览器实验室等
 browser_ext/           # 密桥 Hook / ReRes 扩展源码
 burp_ext/              # Burp 扩展 Java 源码
-vue版/                 # Vue + Electron 网页版（可选）
+mcp_server/            # MCP Server（Cursor 等智能体可调用）
 hooks/                 # 浏览器 Hook 脚本
 profiles/              # 项目配置（模板可提交；用户方案 git 忽略）
 plugins/               # 各项目生成的插件（用户方案 git 忽略）

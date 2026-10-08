@@ -17,7 +17,10 @@ EXT_ROOT = os.path.join(ROOT, "browser_ext")
 VENDOR_DIR = os.path.join(EXT_ROOT, "vendor")
 SCRIPTS_DIR = os.path.join(EXT_ROOT, "scripts")
 CB_HOOK_DIR = os.path.join(EXT_ROOT, "cb_hook")
+# Playwright init_script 用：比扩展 content_script 更早，抗 CDP/页面同步检测
+SITE_EARLY_HOOK_PATH = os.path.join(EXT_ROOT, "site_early_hook.js")
 PROFILE_DIR = os.path.join(ROOT, "data", "browser_profile")
+PROFILE_DIR_CHROME = os.path.join(ROOT, "data", "browser_profile_chrome")
 PENDING_INSTALL_FLAG = os.path.join(SCRIPTS_DIR, ".pending_install")
 
 VM_DIR = os.path.join(VENDOR_DIR, "violentmonkey")
@@ -402,16 +405,8 @@ def build_hook_bundle(
             parts.append("try{")
             parts.append(body)
             parts.append("}catch(e){try{console.warn('[CipherBridge] crypto_hook',e);}catch(_){}}")
-    extra = (extra_js or "").strip()
+    extra = _strip_md_fence(extra_js)
     if extra:
-        # 去掉可能的 markdown 围栏
-        if extra.startswith("```"):
-            lines = extra.splitlines()
-            if lines and lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            extra = "\n".join(lines).strip()
         parts.append("/* --- AI 站点补丁 hook_js --- */")
         parts.append("try{")
         parts.append(extra)
@@ -437,6 +432,61 @@ def wrap_userscript(body: str, *, name: str = "CipherBridge Hooks") -> str:
     return header + body
 
 
+def _strip_md_fence(extra: str) -> str:
+    extra = (extra or "").strip()
+    if not extra.startswith("```"):
+        return extra
+    lines = extra.splitlines()
+    if lines and lines[0].startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
+# 通用 CDP 前置：与 browser_stealth.CDP_CONSOLE_PRELUDE 同源（幂等）
+try:
+    from core.browser_stealth import CDP_CONSOLE_PRELUDE as _CDP_CONSOLE_PRELUDE
+except Exception:
+    _CDP_CONSOLE_PRELUDE = (
+        r"(function(){try{if(window.__cbCdpConsolePatched)return;"
+        r"window.__cbCdpConsolePatched=1;var c=console;if(!c)return;"
+        r"['log','debug','info','warn','error'].forEach(function(k){"
+        r"var o=c[k];if(typeof o!=='function')return;c[k]=function(){"
+        r"var a=[].slice.call(arguments);for(var i=0;i<a.length;i++){"
+        r"if(a[i]instanceof Error)a[i]=String(a[i]);}return o.apply(c,a);};});"
+        r"}catch(e){}})();"
+    )
+
+
+def write_site_early_hook(extra_js: str = "") -> str | None:
+    """写入 Playwright document_start 早期补丁（扩展异步注入赶不上 CDP 检测）。
+
+    仅放「站点增量」；通用 CDP/SwiftShader 已在 stealth 底座。
+    extra 为空则删除残留文件，避免上一站补丁泄漏到下一站。
+    """
+    ensure_dirs()
+    extra = _strip_md_fence(extra_js)
+    if not extra:
+        try:
+            if os.path.isfile(SITE_EARLY_HOOK_PATH):
+                os.remove(SITE_EARLY_HOOK_PATH)
+        except OSError:
+            pass
+        return None
+    body = (
+        "/* CipherBridge site_early_hook — Playwright init_script only */\n"
+        + "/* 站点增量；通用 CDP 已在 stealth 底座（此处再带一份幂等兜底） */\n"
+        + _CDP_CONSOLE_PRELUDE
+        + "\ntry{\n"
+        + extra
+        + "\n}catch(e){try{console.warn('[CipherBridge] site_early_hook',e);}catch(_){}}\n"
+    )
+    with open(SITE_EARLY_HOOK_PATH, "w", encoding="utf-8") as f:
+        f.write(body)
+    return SITE_EARLY_HOOK_PATH
+
+
 def export_hooks_to_userscript(
     *,
     include_anti_debug: bool = True,
@@ -448,11 +498,18 @@ def export_hooks_to_userscript(
     """生成油猴用户脚本，并同步到 cb_hook 扩展（下次启动浏览器生效）。"""
     ensure_dirs()
     ensure_cb_hook_extension()
+    extra = _strip_md_fence(extra_js)
+    # 站点补丁同时写入早期 init_script 文件（抗 CDP 时机）
+    early_path = write_site_early_hook(extra)
+    # inject.js / 油猴里也带上通用 CDP 前置，避免仅走扩展时完全没有
+    bundled_extra = (
+        (_CDP_CONSOLE_PRELUDE + "\n" + extra) if extra else ""
+    )
     body = build_hook_bundle(
         include_anti_debug=include_anti_debug,
         include_crypto_hook=include_crypto_hook,
         inject_opts=inject_opts,
-        extra_js=extra_js,
+        extra_js=bundled_extra,
     )
     script = wrap_userscript(body)
     with open(USERSCRIPT_PATH, "w", encoding="utf-8") as f:
@@ -464,11 +521,14 @@ def export_hooks_to_userscript(
     if mark_pending_install:
         with open(PENDING_INSTALL_FLAG, "w", encoding="utf-8") as f:
             f.write(USERSCRIPT_PATH)
-    return {
+    out = {
         "userscript": USERSCRIPT_PATH,
         "cb_hook_inject": os.path.join(CB_HOOK_DIR, "inject.js"),
         "cb_hook_options": os.path.join(CB_HOOK_DIR, "options.json"),
     }
+    if early_path:
+        out["site_early_hook"] = early_path
+    return out
 
 
 def consume_pending_userscript_install() -> str | None:

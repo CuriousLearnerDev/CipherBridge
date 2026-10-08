@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """打包密桥 CipherBridge 绿色版（Windows）.
 
-输出目录默认: D:\\桌面\\代码\\加解密框架打包版
+输出目录默认: 当前目录下的 CipherBridge-portable/
 双击 密桥.exe 即可运行，无需安装 Python。
 
 用法:
     python scripts/build_portable.py
-    python scripts/build_portable.py --out "D:\\其它路径"
+    python scripts/build_portable.py --out "D:/some/other/path"
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parents[1]
-DEFAULT_OUT = Path(r"D:\桌面\代码\加解密框架打包版")
+DEFAULT_OUT = Path.cwd() / "CipherBridge-portable"
 
 # mitmdump 子进程需从磁盘加载（plugin.py / main.py 模式）
 RUNTIME_DIRS = ("sdk", "core", "extensions", "hooks", "img", "config", "profiles", "plugins", "analyzer")

@@ -18,6 +18,12 @@ public interface IBurpExtenderCallbacks {
 
     IExtensionHelpers getHelpers();
 
+    /**
+     * Persist a temporary request/response so it remains valid after the
+     * context-menu callback returns (required before background send).
+     */
+    IHttpRequestResponse saveBuffersToTempFiles(IHttpRequestResponse requestResponse);
+
     String saveConfigAsJson(String... paths);
 
     void loadConfigFromJson(String config);
