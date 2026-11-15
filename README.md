@@ -2,81 +2,139 @@
 
 面向 APP / Web 加解密逆向分析、渗透测试人员的可视化解密框架。
 
-作者：**W啥都学** · 当前版本 **V6.5**（2026.11）
+## 🚀 核心特性
 
-## 为什么选择 CipherBridge？
+- ✨ 一分钟拆出加解密链路
+- 🤖 浏览器 Hook / 小程序 / App 
+- ✨ AI Agent 支持10 模式 分析 debugger、AI 绕过(Bot)、指纹绕过 HOOK 、JS逆向等
+- 🔐 可视化配置 AES / DES / 3DES / SM4 / RSA 等加解密流程
+- ✍️ 自动生成可直接 `mitmdump -s` 加载的插件代码
+- 🌉 Burp Suite 双向加解密桥接 + 扩展联动
+- 🧩 支持扩展自定义 Python 函数
+- 🧪 内置加解密测试与编码识别（Base64 / Hex / JWT 等）
+- 📦 项目导入导出（`.cbproj.zip`）
+- 🔌 MCP Server：外部智能体可查询项目 / 试算加解密
+- 🌍 支持 Windows / macOS / Linux
 
-在 APP 逆向、安全测试和接口联调过程中，经常会遇到：
+## 代理拓扑
 
-- 请求体经过 AES / DES / SM4 等加密
-- 参数或请求头带有 MD5 / SHA256 / HMAC 等签名
-- Burp Suite 抓到的全是密文，无法直接改包重放
+![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/e2f83ef5-edda-4dbf-a8f0-cf24bbc920a1.png)
 
-密桥就是为了解决这些问题而生的：在本地搭一条
+## 目前支持10种Agent 模式：
 
-**浏览器 / APP → 解密端 → Burp → 加密端 → 服务器**
+| 模式           | 作用                           |
+| :------------- | :----------------------------- |
+| 识别加解密     | 选字段 → 识别算法，输出 steps  |
+| 分析加解密     | 选字段 → 分析并生成解密 plugin |
+| 分析密钥       | 定位固定 / 动态密钥与来源      |
+| 分析加密       | 选字段 → 分析并生成加密 plugin |
+| 分析 debugger  | 反调试 / inject_opts           |
+| AI 绕过(Bot)   | 策略扫描 + 实时通关            |
+| 指纹绕过 HOOK  | FingerprintJS / canvas 等      |
+| JS 逆向        | 定位加解密业务函数             |
+| JS 解密/解混淆 | 解混淆并输出可读 JS            |
+| Hash Hook      | 哈希 / 签名路径 Hook           |
 
-的代理链，让你在 Burp 里改明文，两端自动加解密。
+## 自带HOOK检查对抗
 
-## V6.5 更新（当前版本 · 2026.11）
+| 项                        | 说明                                 |
+| :------------------------ | :----------------------------------- |
+| 密钥 Hook                 | 勾住加解密相关调用                   |
+| 反调试                    | 注入 anti_debug，并可中和反 DevTools |
+| CDP 定位 debugger         | 碰到 debugger 时记脚本位置并继续     |
+| 响应改写 debugger→return  | 落地前把字面量 debugger 改成 return  |
+| 浏览器扩展—油猴           | 用户脚本通道                         |
+| 浏览器扩展—密桥 Hook 扩展 | 密桥自带 Hook 扩展                   |
 
-- **AI 浏览器绕过 Agent**  
-  独立「绕过 Bot / 挑战」窗口：全量策略扫描（拟真 / 真实 / CDP / 反 DevTools 等）+ 实时通关，也可只扫策略；通关后可一键同步实验室浏览器选项
+## 浏览器特征对抗检测
 
-- **浏览器拟真与反检测**  
-  UA / locale / 时区、隐藏 webdriver、JS 挑战重试；反 DevTools 中和可开关（减轻闪一下变 `about:blank`）
+| 项               | 实际用途                                                 |
+| :--------------- | :------------------------------------------------------- |
+| 真实浏览器       | 本机 Chrome/Edge，不注入；有些强 JS 挑战                 |
+| 系统浏览器 + CDP | 挂本机浏览器；Playwright 直启被拦时用（支持Chrome/Edge） |
+| 记录模式         | 固定 Profile，保留 Cookie/登录态                         |
+| 浏览器引擎       | 选 Chromium / Chrome / Edge，换内核有时能避开某类检测    |
+| 抓包获取流量     | 抓包入口，跟特征检测无关                                 |
 
-- **多模式 Agent**  
-  分析密钥 / 分析加密 / 生成解密插件等；可指定请求·响应字段，减少盲目猜测；上下文详情改为可读全文展示
+## 支持加解密对抗
 
-- **加解密自动验证 + AI 修正**  
-  生成后对采样流量试算；失败回灌 AI 修正步骤（多轮），并提示不可逆 Hash / HMAC 场景
+| 分类         | 算法/项目                          | 模式                         | 填充                                    | 密文格式    | 作用位置/输出                                                |
+| :----------- | :--------------------------------- | :--------------------------- | :-------------------------------------- | :---------- | :----------------------------------------------------------- |
+| 可逆加解密   | AES                                | ECB、CBC、CFB、OFB、CTR、GCM | PKCS7、ZeroPadding、NoPadding、ISO10126 | Base64、Hex | 请求字段加密/解密、响应字段加密/解密（Body JSON、Form、URL Query） |
+| 可逆加解密   | DES                                | ECB、CBC、CFB、OFB、CTR、GCM | PKCS7、ZeroPadding、NoPadding、ISO10126 | Base64、Hex | 同上                                                         |
+| 可逆加解密   | 3DES                               | ECB、CBC、CFB、OFB、CTR、GCM | PKCS7、ZeroPadding、NoPadding、ISO10126 | Base64、Hex | 同上                                                         |
+| 可逆加解密   | SM4                                | ECB、CBC、CFB、OFB、CTR、GCM | PKCS7、ZeroPadding、NoPadding、ISO10126 | Base64、Hex | 同上                                                         |
+| 可逆加解密   | RSA                                | —                            | OAEP、PKCS1v15                          | Base64、Hex | 同上                                                         |
+| 可逆加解密   | SM2                                | —                            | 格式：C1C3C2、C1C2C3                    | Base64、Hex | 同上                                                         |
+| 可逆加解密   | XOR                                | —                            | —                                       | Base64、Hex | 同上                                                         |
+| 签名 / Hash  | Hash                               | —                            | —                                       | hex、base64 | 可写到：Header、Body 字段、URL 参数                          |
+| 签名 / Hash  | HMAC                               | —                            | —                                       | hex、base64 | 同上                                                         |
+| 签名 / Hash  | 排序拼接签名                       | —                            | —                                       | hex、base64 | 同上（MD5、SHA256、SHA1、SM3）                               |
+| 编码         | Base64 编码 / 解码                 | —                            | —                                       | —           | —                                                            |
+| 编码         | Hex 编码 / 解码                    | —                            | —                                       | —           | —                                                            |
+| 编码         | URL 编码 / 解码                    | —                            | —                                       | —           | —                                                            |
+| 其它相关步骤 | AuthToken 生成（AES / SM4）        | —                            | —                                       | —           | —                                                            |
+| 其它相关步骤 | 定义密钥、提取密钥、派生密钥       | —                            | —                                       | —           | —                                                            |
+| 其它相关步骤 | 拼接字符串、字符串切片、字符串反转 | —                            | —                                       | —           | —                                                            |
+| 其它相关步骤 | 正则清洗                           | —                            | —                                       | —           | —                                                            |
+| 其它相关步骤 | 生成时间戳、生成随机数             | —                            | —                                       | —           | —                                                            |
+| 其它相关步骤 | 设置 Header、设置 Body 字段        | —                            | —                                       | —           | —                                                            |
+| 其它相关步骤 | 自定义扩展函数                     | —                            | —                                       | —           |                                                              |
 
-- **混合加密识别增强**  
-  更稳地识别 AES+RSA、会话密钥等混合方案
+## 🌉 V6.5 更新（2026.11）
 
-- **Web UI（FastAPI）**  
-  `python -m web` 启动浏览器版，能力对齐桌面：AI 实验室、解析器、构建器、项目管理、代理启停
+- AI 浏览器绕过 Agent：独立绕过 Bot / 挑战窗口：全量策略扫描（拟真 / 真实 / CDP / 反 DevTools 等）+ 实时通关，也可只扫策略；通关后可一键同步实验室浏览器选项
 
-- **桌面 / Web 双入口**  
-  `python gui.py`（PyQt6）与 `python -m web` 共用同一套项目、插件与配置
+- 浏览器拟真与反检测：UA / locale / 时区、隐藏 webdriver、JS 挑战重试；反 DevTools 中和可开关（减轻闪一下变 `about:blank`）
+- 多模式 Agent：分析密钥 / 分析加密 / 生成解密插件等；可指定请求·响应字段，减少盲目猜测；上下文详情改为可读全文展示
+- 加解密自动验证 + AI 修正：生成后对采样流量试算；失败回灌 AI 修正步骤（多轮），并提示不可逆 Hash / HMAC 场景
+- 混合加密识别增强：更稳地识别 AES+RSA、会话密钥等混合方案
 
-## 历史版本摘要
+## 🌉 6.0 版本（2026.10）
 
-<details>
-<summary>V5.0（2026.8）</summary>
+- **AI 浏览器绕过 Agent**
+  独立AI 绕过（Bot/挑战）窗口，通用浏览器 Agent 实时通关，也可离线分析补丁
 
-- 界面抛光：主 Tab / AI 实验室分段、采集栏与 Agent 输入区、彩色图标
-- Bypass Hook：选定加密 / 哈希路径改成恒等，明文进 Burp，再「生成加密」
-- 密桥 Hook 扩展：弹窗可切换代理（直连 / 解密端 / Burp / 自定义）
-- Burp 扩展源码（`burp_ext/`）：上游桥接 + 右键「发送到密桥」
-- 不可逆算法提示；目标字段绑定
+- **浏览器拟真底座**
+  UA / locale / 时区、隐藏 webdriver、JS 挑战重试等，采集时更接近真实 Chrome
 
-</details>
+- **反 DevTools 可开关**
+  通用中和 DisableDevtool 等（防闪一下变 about:blank），和反调试注入一起可开关，不绑死某个测站
 
-<details>
-<summary>V4.0 / V3.x</summary>
+- **加解密自动验证 + AI 修正循环**
+  生成后对采样流量试算；失败回灌 AI 修正步骤，最多约 5 轮
 
-- **4.0**：AI 实验室加解密 / 反调试分离；debugger 改写、CDP、油猴 + ReRes + 密桥 Hook
-- **3.5**：内置代理浏览器、小程序反编译与 AI Agent 优化
-- **3.1**：小程序反编译、AI Agent 初版
+- **混合加密识别增强**
+  AI 更稳地识别 AES+RSA / 会话密钥等混合方案（不只固定对称密钥）
 
-</details>
+## 🌉5.0 版本（2026.8.22）
 
-## 核心特性
+- **界面抛光**：主 Tab / AI 实验室分段胶囊、采集栏与 Agent 输入区圆角条、彩色自定义图标（解析器 / 构建器 / 浏览器）
+- **Bypass Hook**：把选定加密 / 哈希路径改成恒等，使明文进 Burp，再一键「生成加密」
+- **密桥 Hook 扩展**：弹窗可切换代理（直连 / 解密端 / Burp / 自定义）
+- **Burp 扩展源码**（`burp_ext/`）：上游桥接 + 右键「发送到密桥」
+- **Vue / Electron 网页版**（`vue版/`）：与 PyQt 并行的桌面 UI，经本地 FastAPI 启停代理
+- **不可逆算法提示**：仅 Hash / HMAC 步骤时，「生成解密」会明确警告
+- **目标字段绑定**：Agent 可限定请求 / 响应字段，减少盲目猜测
 
-- 一分钟拆出加解密链路
-- 浏览器 Hook / 小程序 / App + AI Agent 自动分析生成脚本
-- 可视化配置 AES / DES / 3DES / SM4 / RSA 等加解密流程
-- 自动生成可直接 `mitmdump -s` 加载的插件代码
-- Burp Suite 双向加解密桥接 + 扩展联动
-- 自定义 Python 扩展函数
-- 内置加解密测试与编码识别（Base64 / Hex / JWT 等）
-- 项目导入导出（`.cbproj.zip`）
-- 深色 / 浅色主题
-- PyQt6 桌面版 + Web UI
-- MCP Server：外部智能体可查询项目 / 试算加解密
-- Windows / macOS / Linux
+## 🌉 4.0 版本（2026.8.7）
+
+- AI 实验室：加解密 / 反调试分离，Agent 可识别 debugger 并生成 Hook
+- 反调试：响应改写 debugger→return、CDP 定位暂停位置、油猴 + ReRes(MV3) + 密桥 Hook 扩展
+- 浏览器扩展默认加载；Hook 脚本可在界面勾选启用
+
+## 🌉 3.5 版本（2026.7.27）
+
+- 主要优化了界面
+- 增加内置代理浏览器
+- 优化小程序反编译功能
+- 优化 AI Agent
+
+## 🌉 3.1 版本（2026.7.24）
+
+- 增加小程序反编译功能
+- 添加 AI Agent
+- 主要优化了界面
 
 ## 环境要求
 
@@ -87,110 +145,110 @@
 ## 安装
 
 ```bash
+# 克隆仓库后进入目录
 git clone https://github.com/CuriousLearnerDev/CipherBridge.git
 cd CipherBridge
 
+# 可选
 pip install -r requirements.txt
-playwright install chromium
+playwright install chromium 
 
-# 桌面 GUI
+# 运行
 python gui.py
-
-# 或 Web UI（默认 http://127.0.0.1:8787）
-python -m web
-# python -m web --host 0.0.0.0 --port 8787
 ```
 
-### MCP Server（可选）
+### MCP Server（可选，给其他智能体用）
 
 ```bash
 pip install "mcp>=1.26,<2" attrs
 python -m mcp_server
 ```
 
-配置与工具列表见 [`mcp_server/README.md`](mcp_server/README.md)。
-
-## 代理拓扑
-
-![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/e2f83ef5-edda-4dbf-a8f0-cf24bbc920a1.png)
+ 配置与工具列表见 [`mcp_server/README.md`](mcp_server/README.md)
 
 > 解密端收到密文，解密后交给 Burp；Burp 改完请求后由加密端重新加密发出。  
 > 若只需单向解密调试，可只启动解密端。  
-> 左侧「打开代理浏览器」可经解密端端口打开 Chromium；AI「网页」启动浏览器时也可自动接入解密端。
+> 左侧「打开代理浏览器」可经解密端端口打开 Chromium；AI「网页」启动浏览器时也可自动接入解密端
 
-通过 AI 生成代码后，浏览器走密桥解密，Burp 设置上游代理再走密桥加密发往服务器：
+通过AI 生成的代码，然后浏览器走密桥会解密，然后burp在设置上游代理在走密桥会加密发送给服务器
 
 ![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/11a692ec6c18111830149fe1a79d3605.png)
 
-## 界面预览
+## 📸 界面预览
 
 ### 首页
 
-![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20261008165927261.png)
+![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20261112104739343.png)
+
+## Agent 模式
+
+![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20261112104916694.png)
+
+
 
 ### AI 自动化分析
 
-点击「启动」后会打开浏览器，自动采集页面 JS 以及请求/响应数据，并尝试按内置规则匹配加解密方式。规则未命中时可使用 AI 辅助分析。
+点击「启动」后会打开浏览器，自动采集页面 JS 以及请求/响应数据，并尝试按内置规则匹配加解密方式。若规则未匹配成功，可使用 AI 辅助分析。
 
-支持多种前端检测绕过模式：
+支持前端多种模式绕过前端检测
 
 ![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/214825548bf48b1ceed5eb6291403c92.png)
 
-可选择 HOOK 功能绕过检测：
+可以选择HOOK功能绕过检测
 
 ![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/d96a171f9962c8ab2892bfd35d138cc3.png)
 
-分析加解密时可指定字段，减少偏移：
+点击加分析加解密可以点击选择要加解密的字符指定分析大大减少分析偏移的问题
 
 ![image-20261008171443260](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20261008171443260.png)
 
 ![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/6bdabe1ae27017230ae7461a21301ea0.png)
 
-支持查看 AI 分析上下文：
-
+支持ai分析上下文查看
 ![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/ae3eaa243aa6fe1fa3fbfa805fb49143.png)
 
-分析完成后会自动验证加解密是否正确：
+分析完成后会自动检测是否分析加解密正确
 
 ![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/1658424ee69c1a5f4af9fc471542e9d2.png)
 
-可继续生成加解密代理代码：
+可以点击继续生成加解密代理代码
 
 ![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20261008171607904.png)
 
-生成的代理代码支持右键把请求转到解析器里测试：
+生成出来的代理代码支持右键请求数据包转移到请求解析器里面测试查看加解密的问题
 
 ![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/0dd48f43ee0500572d733691b4929dbe.png)
 
-多模式 Agent：
+支持多个AI 智能体分析检测功能
 
 ![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/97d79aa96f9d2bca3eb29c80afa4465c.png)
 
-可定位加解密代码位置：
+可以定位到加解密的代码位置
 
 ![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/6a21b1adcd26a1bbdff10c8b30defcf5.png)
 
-AI 绕过前端检测：
+支持ai绕过前端检测
 
 ![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20261008171752115.png)
 
-可在密桥内直接打开浏览器并设置挂载：
+
+
+可以在密桥里面直接打开浏览器设置浏览器挂载的位置
 
 ![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20261008170630668.png)
 
 ![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/7b027ac9bf1bfe8eec68b5f896e003d5.png)
-
-可直接走密桥加密或解密，再转发到 Burp：
+可以直接走密桥加密或者解密转发到burp上
 
 ![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/11a692ec6c18111830149fe1a79d3605.png)
 
 > 点击左侧流量列表时，请求/响应详情显示在「请求/响应」Tab，不会覆盖 AI 分析结果。
 
-**Bypass Hook**：当加密函数可 Hook 时，可让选定字段以明文进入 Burp，便于改包；确认链路后再「生成加密」写回加密端插件。
+**Bypass Hook（4.1）**：当加密函数可 Hook 时，可让选定字段以明文进入 Burp，便于改包；确认链路后再「生成加密」写回加密端插件。
 
 ### 请求解析器
 
-可右键把请求流量放到解析器：
+可以直接右键叫请求流量放到解析器里面
 
 ![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20261008170859269.png)
 
@@ -200,31 +258,33 @@ AI 绕过前端检测：
 
 ![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20261008171019098.png)
 
-填写后自动生成代码，可整体测试查看结果：
+填写好后会自动生成代码，然后可以点击整个的代码测试查看结果
 
 ![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20261008171829015.png)
 
 ### 可视化构建器
 
-无需粘贴报文，可通过步骤列表构建加解密流程，并提供多个案例模板：
+无需粘贴报文，可直接通过步骤列表构建加解密流程，并提供多个案例模板：
 
 ![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20261008172047500.png)
+
+会自动生成模式然后自己添加要加解密的字段
 
 ![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20261008172124989.png)
 
 ### 插件编辑器
 
-复杂逻辑（字符串反转、前后缀拼接、远程取签名等）可在「插件编辑器」编写自定义 Python 函数：
+部分接口逻辑较复杂（如字符串反转、前后缀拼接、每次请求远程服务器获取签名字段等），可通过「插件编辑器」编写自定义 Python 函数：
 
 ![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20261008172154710.png)
 
-保存后可在配置步骤时从下拉列表选用：
+编写并保存的扩展函数，可在配置加解密步骤时从下拉列表中选择调用：
 
 ![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20261008172224329.png)
 
 ### 加密分析
 
-自动识别可能的编码类型（Base64 / Hex / JWT 等）：
+自动识别数据可能的编码类型（Base64 / Hex / JWT 等），基于本地规则匹配：
 
 ![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20261008172306696.png)
 
@@ -239,7 +299,7 @@ AI 绕过前端检测：
 
 ### 导入导出
 
-左侧项目选择旁的 **⋯** 菜单 →「导出项目…」/「导入项目…」。
+若需长期对同一目标做安全测试，或需与他人协作，可使用项目导入/导出功能。左侧项目选择旁的 **⋯** 菜单 →「导出项目…」/「导入项目…」。
 
 每个加解密方案 = 一个独立项目：
 
@@ -257,7 +317,7 @@ plugins/{name}/
 | `manifest.json` | 格式版本、导出时间 |
 | `profile.yaml` | 项目配置 |
 | `plugin.py` | 加解密插件代码 |
-| `state.json` | 可视化步骤（可选） |
+| `state.json` | 可视化步骤（可选，有则包含） |
 
 ![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/image-20261008172329291.png)
 
@@ -303,8 +363,7 @@ mitmdump -s main.py -p 8083
 ## 目录说明
 
 ```
-gui.py                 # PyQt6 GUI 入口
-web/                   # Web UI（FastAPI + 静态页）
+gui.py                 # PyQt GUI 入口
 codegen.py             # 步骤 → 插件代码生成
 sdk/                   # 加解密 / 签名 / 编码纯函数库
 extensions/            # 自定义扩展（可在构建器中选用）
@@ -362,5 +421,4 @@ CipherBridge 是一款面向 APP/Web 加解密分析、逆向工程、安全测�
 如果您不同意上述内容，请立即停止使用本项目。
 
 **W啥都学出品**
-
 ![](https://zssnp-1301606049.cos.ap-nanjing.myqcloud.com/img/zuozgzh.png)
