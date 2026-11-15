@@ -1,0 +1,46 @@
+# 密桥 CipherBridge — Python 依赖
+# 环境: Python 3.10+
+#
+# 安装:
+#   pip install -r requirements.txt
+#
+# AI自动化分析使用浏览器采集时，还需安装 Chromium:
+#   playwright install chromium
+
+# ── GUI ──────────────────────────────────────────────
+PyQt6>=6.6,<7
+PyQt6-WebEngine>=6.6,<7
+
+# ── 配置 / 项目 ──────────────────────────────────────
+PyYAML>=6.0
+
+# ── 加解密 (AES / DES / RSA 等，含国密 SM3/SM4 为内置纯 Python) ──
+pycryptodome>=3.20
+# SM2 国密非对称（可视化/测试里选 SM2 时需要）:
+#   pip install gmssl
+
+# ── HTTP 客户端 (插件转发 Burp、AI API 调用等) ───────
+requests>=2.31
+# AI 网关遇 Cloudflare 时用浏览器 TLS 指纹（推荐）
+curl_cffi>=0.7
+
+# ── AI Agent (vendor/agent_core，Anthropic Messages + tools) ──
+httpx>=0.27
+pydantic>=2.0
+
+# ── MCP Server（供 Cursor / 其他智能体调用，可选）────────
+mcp>=1.26,<2
+attrs>=23.0
+
+# ── 代理核心 (mitmdump，含 HTTPS 解密) ───────────────
+mitmproxy>=10.0,<12
+
+# ── Web UI / 本地 API（与 gui.py 并行）────────────────
+# 推荐 fastapi>=0.128（兼容 starlette 1.x / sse-starlette）
+fastapi>=0.128.0
+uvicorn>=0.32.0
+pydantic>=2.0
+
+# ── AI自动化分析 — 浏览器 Hook / 流量采集 (可选) ─────
+# 不使用 AI Tab 的浏览器功能时可注释掉下一行
+playwright>=1.40

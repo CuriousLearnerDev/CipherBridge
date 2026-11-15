@@ -1,0 +1,386 @@
+"""App 逆向面板 — 选择 APK，apktool 反编译，筛加解密代码给 Agent."""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QPlainTextEdit, QFileDialog, QMessageBox, QListWidget, QListWidgetItem,
+    QTabWidget,
+)
+
+from core.app_reverse import (
+    ApkReverseError,
+    decode_apk,
+    default_apk_workspace,
+    ensure_tools_dirs,
+    missing_required_tools,
+    resolve_apktool_jar,
+    resolve_jadx_gui,
+    resolve_java,
+    tools_setup_message,
+    tools_status,
+)
+from core.icon_loader import set_btn_icon
+from core.theme import style_button, style_muted_label, setup_sub_tabs
+
+
+class _DecodeWorker(QThread):
+    finished_ok = pyqtSignal(object)
+    failed = pyqtSignal(str)
+    log = pyqtSignal(str)
+
+    def __init__(self, apk_path: str, parent=None):
+        super().__init__(parent)
+        self.apk_path = apk_path
+
+    def run(self):
+        try:
+            result = decode_apk(self.apk_path, on_log=lambda m: self.log.emit(m))
+            for msg in result.messages:
+                self.log.emit(msg)
+            self.finished_ok.emit(result)
+        except ApkReverseError as e:
+            self.failed.emit(str(e))
+        except Exception as e:
+            self.failed.emit(f"未预期错误: {e}")
+
+
+class AppReversePanel(QWidget):
+    """导入 APK → 反编译 → 把加解密相关代码注入右侧 Agent."""
+
+    scripts_ready = pyqtSignal(dict, dict)
+    request_ai_analyze = pyqtSignal()
+    script_preview = pyqtSignal(str, str)  # label, content → 右侧详情
+    capture_log = pyqtSignal(str)
+
+    def __init__(self, parent=None, *, compact: bool = True):
+        super().__init__(parent)
+        self._worker: _DecodeWorker | None = None
+        self._last_result = None
+        self._apk_path = ""
+        self._compact = compact
+        self._build_ui()
+        self._refresh_tools_hint()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        m = 0 if self._compact else 8
+        layout.setContentsMargins(m, m, m, m)
+        layout.setSpacing(8)
+
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        self.pick_btn = QPushButton("选择 APK")
+        self.pick_btn.clicked.connect(self._pick_apk)
+        style_button(self.pick_btn, "default", size="sm")
+        set_btn_icon(self.pick_btn, "folder", size=14)
+        row.addWidget(self.pick_btn, 1)
+        self.decode_btn = QPushButton("反编译并扫描")
+        self.decode_btn.setEnabled(False)
+        self.decode_btn.clicked.connect(self._start_decode)
+        style_button(self.decode_btn, "primary", size="sm")
+        set_btn_icon(self.decode_btn, "unlock", size=14)
+        row.addWidget(self.decode_btn, 1)
+        layout.addLayout(row)
+
+        row2 = QHBoxLayout()
+        self.jadx_btn = QPushButton("打开 jadx")
+        self.jadx_btn.setToolTip("用 jadx-gui 打开当前 APK 做深度查看")
+        self.jadx_btn.clicked.connect(self._open_jadx)
+        style_button(self.jadx_btn, "ghost", size="sm")
+        row2.addWidget(self.jadx_btn)
+        self.open_out_btn = QPushButton("输出目录")
+        self.open_out_btn.setEnabled(False)
+        self.open_out_btn.clicked.connect(self._open_out)
+        style_button(self.open_out_btn, "ghost", size="sm")
+        row2.addWidget(self.open_out_btn)
+        self.setup_btn = QPushButton("配置工具")
+        self.setup_btn.setToolTip("查看缺失工具说明，并打开 tools 目录自行放置")
+        self.setup_btn.clicked.connect(self._show_tools_setup)
+        style_button(self.setup_btn, "ghost", size="sm")
+        row2.addWidget(self.setup_btn)
+        row2.addStretch()
+        layout.addLayout(row2)
+
+        self.apk_label = QLabel("未选择 APK")
+        self.apk_label.setObjectName("appApkLabel")
+        self.apk_label.setWordWrap(True)
+        style_muted_label(self.apk_label)
+        layout.addWidget(self.apk_label)
+
+        # 工具状态：绿点=已检测到
+        self.tools_row = QHBoxLayout()
+        self.tools_row.setSpacing(12)
+        self.tools_row.setContentsMargins(0, 2, 0, 2)
+        self._tool_dots: dict[str, QLabel] = {}
+        for key, title in (
+            ("java", "Java"),
+            ("apktool", "apktool"),
+            ("jadx_gui", "jadx"),
+        ):
+            chip = QLabel()
+            chip.setObjectName("appToolChip")
+            chip.setTextFormat(Qt.TextFormat.RichText)
+            self._tool_dots[key] = chip
+            self.tools_row.addWidget(chip)
+        self.tools_ready = QLabel()
+        self.tools_ready.setObjectName("appToolsReady")
+        style_muted_label(self.tools_ready)
+        self.tools_row.addWidget(self.tools_ready, 1)
+        layout.addLayout(self.tools_row)
+
+        # 运行时状态（有内容才显示）
+        self.status = QLabel("")
+        self.status.setWordWrap(True)
+        self.status.hide()
+        style_muted_label(self.status)
+        layout.addWidget(self.status)
+
+        tabs = QTabWidget()
+        setup_sub_tabs(tabs)
+        self.hit_list = QListWidget()
+        self.hit_list.itemClicked.connect(self._preview_hit)
+        tabs.addTab(self.hit_list, "加解密候选")
+        self.log_view = QPlainTextEdit()
+        self.log_view.setReadOnly(True)
+        self.log_view.setMaximumBlockCount(1500)
+        self.log_view.setPlaceholderText("反编译日志")
+        tabs.addTab(self.log_view, "日志")
+        tabs.setMinimumHeight(220)
+        layout.addWidget(tabs, 1)
+
+    def _tool_chip_html(self, name: str, ok: bool) -> str:
+        from core.theme import C
+
+        if ok:
+            color = C.get("ok", "#3fb950")
+            dot = "●"
+            tip = "已检测到"
+        else:
+            color = C.get("text_dim", "#8b949e")
+            dot = "○"
+            tip = "未找到"
+        return (
+            f'<span style="color:{color}; font-size:13px;" title="{tip}">{dot}</span>'
+            f'&nbsp;<span style="color:{C.get("text", "#e6edf3")}; font-size:12px;">{name}</span>'
+        )
+
+    def _refresh_tools_hint(self):
+        ensure_tools_dirs()
+        st = tools_status()
+        labels = {
+            "java": "Java",
+            "apktool": "apktool",
+            "jadx_gui": "jadx",
+        }
+        for key, title in labels.items():
+            chip = self._tool_dots.get(key)
+            if chip is None:
+                continue
+            ok = bool(st.get(key))
+            chip.setText(self._tool_chip_html(title, ok))
+            chip.setToolTip("已检测到" if ok else "未找到，可点「配置工具」")
+        miss = missing_required_tools()
+        from core.theme import C
+
+        if miss:
+            self.tools_ready.setText(f"缺少 {', '.join(miss)} — 点「配置工具」")
+            self.tools_ready.setStyleSheet(
+                f"color: {C.get('warn', '#d29922')}; background: transparent; font-size: 11px;"
+            )
+        else:
+            self.tools_ready.setText("已就绪")
+            self.tools_ready.setStyleSheet(
+                f"color: {C.get('ok', '#3fb950')}; background: transparent; font-size: 11px; font-weight: 600;"
+            )
+        self.jadx_btn.setEnabled(bool(st["jadx_gui"]))
+
+    def _set_status(self, text: str) -> None:
+        text = (text or "").strip()
+        self.status.setText(text)
+        self.status.setVisible(bool(text))
+
+    def _show_tools_setup(self):
+        ensure_tools_dirs()
+        # 清缓存，用户刚放完 jar 后点配置/再反编译能立刻生效
+        resolve_java.cache_clear()
+        resolve_jadx_gui.cache_clear()
+        resolve_apktool_jar.cache_clear()
+        self._refresh_tools_hint()
+        msg = tools_setup_message()
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setWindowTitle("配置 App 逆向工具")
+        box.setText(msg)
+        open_btn = box.addButton("打开 tools 目录", QMessageBox.ButtonRole.ActionRole)
+        box.addButton("知道了", QMessageBox.ButtonRole.AcceptRole)
+        box.exec()
+        if box.clickedButton() == open_btn:
+            self._open_tools_dir()
+
+    def _open_tools_dir(self):
+        path = ensure_tools_dirs()
+        if sys.platform == "win32":
+            os.startfile(path)  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", path])
+        else:
+            subprocess.Popen(["xdg-open", path])
+
+    def _log(self, text: str):
+        self.log_view.appendPlainText(text)
+        self.capture_log.emit(text)
+
+    def _pick_apk(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择 APK", "", "Android APK (*.apk);;所有文件 (*.*)",
+        )
+        if not path:
+            return
+        self._apk_path = os.path.abspath(path)
+        self.apk_label.setText(self._apk_path)
+        self.decode_btn.setEnabled(True)
+        self._log(f"已选择: {self._apk_path}")
+
+    def _start_decode(self):
+        if not self._apk_path or not os.path.isfile(self._apk_path):
+            QMessageBox.warning(self, "提示", "请先选择 APK")
+            return
+        # 重新探测，避免用户刚放入 jar 仍读到旧缓存
+        resolve_java.cache_clear()
+        resolve_apktool_jar.cache_clear()
+        resolve_jadx_gui.cache_clear()
+        self._refresh_tools_hint()
+        miss = missing_required_tools()
+        if miss:
+            self._show_tools_setup()
+            return
+        if self._worker and self._worker.isRunning():
+            self._log("正在反编译，请稍候…")
+            return
+        self.decode_btn.setEnabled(False)
+        self.pick_btn.setEnabled(False)
+        self.hit_list.clear()
+        self.log_view.clear()
+        self.status.setText("正在反编译并扫描加解密…")
+        self.status.setVisible(True)
+        self._worker = _DecodeWorker(self._apk_path, self)
+        self._worker.log.connect(self._log)
+        self._worker.finished_ok.connect(self._on_done)
+        self._worker.failed.connect(self._on_fail)
+        self._worker.start()
+
+    def _on_done(self, result):
+        self._last_result = result
+        self.decode_btn.setEnabled(True)
+        self.pick_btn.setEnabled(True)
+        self.open_out_btn.setEnabled(True)
+        label = result.app_label or os.path.basename(result.apk_path)
+        pkg = f" ({result.package_name})" if result.package_name else ""
+        self._set_status(f"完成 {label}{pkg} · 候选 {len(result.crypto_hits)} · {result.out_dir}")
+        self.hit_list.clear()
+        for h in result.crypto_hits:
+            item = QListWidgetItem(f"[{h.score}] {h.relpath}")
+            item.setData(Qt.ItemDataRole.UserRole, h.path)
+            self.hit_list.addItem(item)
+        scripts = result.scripts_for_ai()
+        if scripts:
+            meta = {
+                "source": "apk",
+                "apk": result.apk_path,
+                "package": result.package_name,
+                "out_dir": result.out_dir,
+            }
+            self.scripts_ready.emit(scripts, meta)
+            self._log(f"已注入 Agent 素材 {len(scripts)} 个 (app://…)")
+        else:
+            self._log("未筛到明显加解密代码，可打开 jadx 手工定位后再试")
+
+    def _on_fail(self, err: str):
+        self.decode_btn.setEnabled(bool(self._apk_path))
+        self.pick_btn.setEnabled(True)
+        self._set_status("反编译失败")
+        self._log(f"错误: {err}")
+        low = (err or "").lower()
+        if "java" in low or "apktool" in low or "未找到" in err:
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle("App 逆向失败")
+            box.setText(err)
+            box.setInformativeText("需要自行配置反编译工具（大文件不随仓库分发）。")
+            setup_btn = box.addButton("配置工具", QMessageBox.ButtonRole.ActionRole)
+            box.addButton("关闭", QMessageBox.ButtonRole.RejectRole)
+            box.exec()
+            if box.clickedButton() == setup_btn:
+                self._show_tools_setup()
+        else:
+            QMessageBox.critical(self, "App 逆向失败", err)
+
+    def _preview_hit(self, item: QListWidgetItem):
+        path = item.data(Qt.ItemDataRole.UserRole)
+        if not path or not os.path.isfile(path):
+            return
+        label = (item.text() or "").strip() or path
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                text = f.read(80_000)
+        except OSError as e:
+            text = str(e)
+        self.script_preview.emit(label, text)
+
+    def _open_out(self):
+        path = self._last_result.out_dir if self._last_result else default_apk_workspace()
+        if not os.path.isdir(path):
+            return
+        if sys.platform == "win32":
+            os.startfile(path)  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", path])
+        else:
+            subprocess.Popen(["xdg-open", path])
+
+    def _open_jadx(self):
+        resolve_jadx_gui.cache_clear()
+        jadx = resolve_jadx_gui()
+        if not jadx:
+            QMessageBox.information(
+                self, "未找到 jadx-gui",
+                tools_setup_message(missing=["jadx-gui（可选）"]),
+            )
+            self._show_tools_setup()
+            return
+        try:
+            if self._apk_path and os.path.isfile(self._apk_path):
+                subprocess.Popen([jadx, self._apk_path])
+            else:
+                subprocess.Popen([jadx])
+            self._log(f"已启动 jadx: {jadx}")
+        except OSError as e:
+            QMessageBox.warning(self, "启动失败", str(e))
+
+    def _emit_scripts(self, silent: bool = False) -> bool:
+        if not self._last_result:
+            if not silent:
+                QMessageBox.information(self, "提示", "请先反编译 APK")
+            return False
+        scripts = self._last_result.scripts_for_ai()
+        if not scripts:
+            if not silent:
+                QMessageBox.warning(self, "提示", "没有可分析的加解密候选代码")
+            return False
+        meta = {
+            "source": "apk",
+            "apk": self._last_result.apk_path,
+            "package": self._last_result.package_name,
+            "out_dir": self._last_result.out_dir,
+        }
+        self.scripts_ready.emit(scripts, meta)
+        return True
+
+
+AppTab = AppReversePanel

@@ -1,0 +1,9 @@
+{
+  "functionHook": true,
+  "evalHook": true,
+  "timerHook": true,
+  "timerNuke": false,
+  "consoleClear": true,
+  "sizeSpoof": true,
+  "rewriteResponse": false
+}

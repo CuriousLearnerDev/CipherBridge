@@ -1,0 +1,29 @@
+# 模板: AES-ECB + PKCS7 + Base64
+name: myapp
+description: "我的APP"
+
+proxy:
+  decrypt_port: 8080
+  encrypt_port: 8081
+  decrypt_forward: "http://127.0.0.1:8080"
+
+match:
+  methods: [POST]
+  require_fields: [data]
+
+request:
+  body_format: json
+  encryption:
+    algorithm: AES
+    mode: ECB
+    key: "your-16-byte-key!"
+    padding: PKCS7
+    fields: [data]
+  # sign 部分可选，不需要就删掉
+  # sign:
+  #   algorithm: sha256
+  #   source_field: data
+  #   target_name: signature
+
+response:
+  body_format: json

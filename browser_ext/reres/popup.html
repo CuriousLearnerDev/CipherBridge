@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>ReRes</title>
+  <style>
+    body { font: 13px/1.4 sans-serif; margin: 12px; width: 320px; }
+    h1 { font-size: 15px; margin: 0 0 8px; }
+    .hint { color: #666; font-size: 12px; margin-bottom: 10px; }
+    textarea { width: 100%; height: 140px; box-sizing: border-box; font-family: Consolas, monospace; font-size: 12px; }
+    button { margin-top: 8px; padding: 6px 12px; }
+    .ok { color: #0a7; margin-top: 6px; }
+  </style>
+</head>
+<body>
+  <h1>ReRes（密桥 MV3）</h1>
+  <p class="hint">
+    规则 JSON 数组。req=匹配正则，res=替换后的 URL（http/https），checked=是否启用。<br />
+    示例：[{"req":"^https://cdn\\.example\\.com/app\\.js$","res":"https://127.0.0.1:5500/app.js","checked":true}]
+  </p>
+  <textarea id="rules"></textarea>
+  <button id="save">保存并生效</button>
+  <div id="msg" class="ok"></div>
+  <script src="popup.js"></script>
+</body>
+</html>

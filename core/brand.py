@@ -1,0 +1,11 @@
+"""产品名称 — 全局统一."""
+
+APP_NAME = "密桥"
+APP_NAME_EN = "CipherBridge"
+APP_VERSION = "V6.5"
+APP_TITLE = f"{APP_NAME} {APP_NAME_EN} {APP_VERSION}"
+APP_SUBTITLE = "可视化加解密代理工具"
+APP_CREDIT_ORG = ""
+APP_CREDIT_AUTHOR = "W啥都学"
+APP_TAGLINE = f"作者：{APP_CREDIT_AUTHOR}"
+APP_REPO_URL = "https://github.com/CuriousLearnerDev/CipherBridge"

@@ -1,0 +1,9 @@
+# App 逆向工具目录
+#
+# 大文件不随 GitHub 源码分发，请自行下载后放到本目录。
+# 详见 README.md
+#
+# 本地放置后可正常使用，以下模式已忽略：
+tools/apktool/*.jar
+tools/jadx-gui/*.exe
+tools/jadx-gui/jre/

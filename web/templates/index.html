@@ -1,0 +1,842 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>密桥 CipherBridge Web</title>
+  <link rel="stylesheet" href="/static/app.css?v=56" />
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("cb_theme");
+        document.documentElement.setAttribute("data-theme", t === "dark" ? "dark" : "light");
+      } catch (e) {
+        document.documentElement.setAttribute("data-theme", "light");
+      }
+    })();
+  </script>
+</head>
+<body>
+  <div class="shell">
+    <aside class="side">
+      <div class="brand">
+        <div class="brand-mark">密</div>
+        <div>
+          <div class="brand-name">密桥</div>
+          <div class="brand-en">CipherBridge Web</div>
+        </div>
+      </div>
+      <div class="proj-box">
+        <label class="tiny muted">当前项目</label>
+        <select id="globalProject"></select>
+      </div>
+      <nav class="nav" id="nav">
+        <button type="button" data-tab="ailab"><i class="nav-ico" style="--ico:url(/static/icons/nav/ailab.svg)"></i><span>AI 分析</span></button>
+        <button type="button" data-tab="home" class="active"><i class="nav-ico" style="--ico:url(/static/icons/nav/home.svg)"></i><span>概览</span></button>
+        <button type="button" data-tab="projects"><i class="nav-ico" style="--ico:url(/static/icons/nav/projects.svg)"></i><span>项目</span></button>
+        <button type="button" data-tab="parser"><i class="nav-ico" style="--ico:url(/static/icons/nav/parser.svg)"></i><span>请求解析</span></button>
+        <button type="button" data-tab="builder"><i class="nav-ico" style="--ico:url(/static/icons/nav/builder.svg)"></i><span>可视化构建</span></button>
+        <button type="button" data-tab="crypto"><i class="nav-ico" style="--ico:url(/static/icons/nav/crypto.svg)"></i><span>加解密测试</span></button>
+        <button type="button" data-tab="proxy"><i class="nav-ico" style="--ico:url(/static/icons/nav/proxy.svg)"></i><span>代理</span></button>
+        <button type="button" data-tab="settings"><i class="nav-ico" style="--ico:url(/static/icons/nav/settings.svg)"></i><span>设置</span></button>
+      </nav>
+      <div class="side-foot">
+        <div id="sideStatus" class="muted">加载中…</div>
+        <div class="muted tiny">桌面版：python gui.py</div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <!-- 概览 -->
+      <section id="tab-home" class="panel active">
+        <header class="page-head">
+          <h1>概览</h1>
+          <p>Web 与 GUI 共用 profiles / plugins / sdk。</p>
+        </header>
+        <div class="cards" id="homeCards"></div>
+        <div class="note" id="homeNote"></div>
+      </section>
+
+      <!-- 项目 -->
+      <section id="tab-projects" class="panel">
+        <header class="page-head row">
+          <div>
+            <h1>项目管理</h1>
+            <p>点选预览 plugin.py · 与左侧「当前项目」联动</p>
+          </div>
+          <div class="row gap">
+            <button type="button" class="btn primary" id="btnNewProject">新建</button>
+            <button type="button" class="btn" id="btnRefreshProjects">刷新</button>
+          </div>
+        </header>
+        <div class="proj-split">
+          <aside class="proj-list-pane">
+            <div class="proj-list-head">
+              <span>项目 <em id="projectCount">0</em></span>
+              <input id="projectFilter" type="search" placeholder="筛选…" autocomplete="off" />
+            </div>
+            <div class="list proj-list" id="projectList"></div>
+          </aside>
+          <div class="proj-detail">
+            <div class="proj-meta" id="projectMetaStrip">
+              <div class="proj-meta-cell"><span class="k">名称</span><span class="v" id="projMetaName">—</span></div>
+              <div class="proj-meta-cell"><span class="k">角色</span><span class="v" id="projMetaRoles">—</span></div>
+              <div class="proj-meta-cell"><span class="k">插件目录</span><span class="v mono" id="projMetaPlugin">—</span></div>
+              <div class="proj-meta-cell"><span class="k">文件</span><span class="v" id="projMetaFiles">—</span></div>
+              <div class="proj-meta-cell"><span class="k">匹配</span><span class="v mono" id="projMetaMatch">—</span></div>
+            </div>
+            <div class="proj-code-head">
+              <span class="mono" id="projectMeta">plugin.py</span>
+              <div class="row gap">
+                <button type="button" class="btn" id="btnSavePlugin" disabled>保存代码</button>
+                <button type="button" class="btn ghost" id="btnDeleteProject" disabled>删除</button>
+              </div>
+            </div>
+            <div class="proj-code-wrap">
+              <pre class="proj-code-hl burp" id="projectCodeHl" aria-hidden="true"></pre>
+              <textarea class="code-edit proj-code" id="projectCode" spellcheck="false" placeholder="点选左侧项目后，这里显示 plugins/{name}/plugin.py"></textarea>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 请求解析（对齐 GUI：左报文+树 / 右代码；点字段值弹加解密） -->
+      <section id="tab-parser" class="panel">
+        <header class="page-head row">
+          <div>
+            <h1>请求解析器</h1>
+            <p id="parseHint">左键点击字段值 → 选择加解密 → 右侧生成代码</p>
+          </div>
+          <div class="row gap">
+            <label class="chk"><input type="checkbox" id="parseResp" /> 解析响应</label>
+            <button type="button" class="btn ghost" id="btnUndoStep" title="撤销最后一步">撤销</button>
+            <button type="button" class="btn" id="btnClearHttp">清空</button>
+            <button type="button" class="btn" id="btnSaveFromParser">保存代码</button>
+            <button type="button" class="btn primary" id="btnParseHttp">解析</button>
+          </div>
+        </header>
+        <div class="parser-split">
+          <div class="parser-left">
+            <div class="parser-pane parser-raw-pane">
+              <div class="parser-pane-head">
+                <span>HTTP 报文</span>
+                <span class="muted tiny" id="rawHttpHint">请求行 + Headers + Body</span>
+              </div>
+              <div class="parser-code-wrap">
+                <pre class="parser-code-hl burp" id="rawHttpHl" aria-hidden="true"></pre>
+                <textarea id="rawHttp" class="code-edit parser-code" spellcheck="false" placeholder="POST /api HTTP/1.1&#10;Host: example.com&#10;Content-Type: application/json&#10;&#10;{&quot;data&quot;:&quot;...&quot;}"></textarea>
+              </div>
+            </div>
+            <div class="parser-pane parser-tree-pane">
+              <div class="parser-pane-head">
+                <span>字段树</span>
+                <span class="muted tiny" id="parseMeta">尚未解析 · 点击字段值添加加解密</span>
+              </div>
+              <div class="tree parser-tree" id="parseTree">
+                <div class="parser-empty" id="parseEmpty">
+                  粘贴上方报文后点「解析」。<br />
+                  再<strong>点击字段值</strong>弹出加解密配置（同 GUI）。
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="parser-pane parser-code-pane">
+            <div class="parser-pane-head">
+              <span>生成的插件代码</span>
+              <span class="muted tiny mono" id="parserCodeMeta">与可视化构建器同步</span>
+            </div>
+            <pre class="parser-preview burp" id="parserCodePreview"></pre>
+            <div class="parser-code-foot">
+              <button type="button" class="btn ghost" id="btnCopyParserCode">复制代码</button>
+              <span class="muted tiny" id="fieldActions"></span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 构建器 -->
+      <section id="tab-builder" class="panel">
+        <header class="page-head row">
+          <div>
+            <h1>可视化构建器</h1>
+            <p>案例模板 / 步骤列表 → 实时生成 plugin.py → 保存到当前项目</p>
+          </div>
+          <div class="row gap builder-toolbar">
+            <select id="tplSelect" title="案例模板" class="tpl-select">
+              <option value="">选择案例加载…</option>
+            </select>
+            <select id="addOpSelect" title="操作类型"></select>
+            <button type="button" class="btn" id="btnAddOp">添加步骤</button>
+            <button type="button" class="btn ghost" id="btnUndoBuilderStep" title="删除最后一步">撤销</button>
+            <button type="button" class="btn ghost" id="btnClearSteps" title="清空全部步骤">清空</button>
+            <button type="button" class="btn primary" id="btnSavePipeline">保存项目</button>
+          </div>
+        </header>
+        <p class="builder-tpl-hint muted tiny" id="tplHint">选模板可快速起步，参数按实际接口改密钥/字段即可</p>
+        <div class="builder-split">
+          <div class="builder-pane">
+            <div class="builder-pane-head">
+              <span>操作步骤 <em id="stepsCount">0</em></span>
+              <span class="muted tiny" id="stepsHint">↑↓ 调序 · 改参数即时预览</span>
+            </div>
+            <div class="steps" id="stepsList"></div>
+          </div>
+          <div class="builder-pane">
+            <div class="builder-pane-head">
+              <span>生成的插件代码</span>
+              <div class="row gap">
+                <span class="muted tiny mono" id="codePreviewMeta">plugin.py</span>
+                <button type="button" class="btn ghost tiny-btn" id="btnCopyBuilderCode">复制代码</button>
+              </div>
+            </div>
+            <pre class="builder-code burp" id="codePreview" data-plain=""></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- 加解密 -->
+      <section id="tab-crypto" class="panel">
+        <header class="page-head row">
+          <div>
+            <h1>加解密测试</h1>
+            <p>本地 SDK 试算 · 不经过代理</p>
+          </div>
+          <div class="row gap">
+            <button type="button" class="btn ghost" id="btnCryptoCopy" disabled>复制结果</button>
+            <button type="button" class="btn primary" id="btnCryptoRun">运行</button>
+          </div>
+        </header>
+        <div class="crypto-split">
+          <div class="crypto-pane">
+            <div class="crypto-pane-head">
+              <div class="seg" id="cryptoMode">
+                <button type="button" data-mode="analyze" class="active">识别</button>
+                <button type="button" data-mode="aes">AES</button>
+                <button type="button" data-mode="hash">Hash</button>
+                <button type="button" data-mode="encode">编码</button>
+              </div>
+            </div>
+            <div class="crypto-form form-grid" id="cryptoForm"></div>
+          </div>
+          <div class="crypto-pane">
+            <div class="crypto-pane-head">
+              <span>结果</span>
+              <span class="muted tiny" id="cryptoOutMeta">等待运行</span>
+            </div>
+            <pre class="crypto-out burp" id="cryptoOut"></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- 代理 -->
+      <section id="tab-proxy" class="panel">
+        <header class="page-head row">
+          <div>
+            <h1>代理</h1>
+            <p>启停 mitmdump · 需环境变量 <code>CB_WEB_ALLOW_PROXY=1</code></p>
+          </div>
+          <div class="row gap">
+            <button type="button" class="btn ghost" id="btnProxyRefresh">刷新状态</button>
+          </div>
+        </header>
+        <div class="proxy-status" id="proxyCards"></div>
+        <div class="proxy-topo muted tiny" id="proxyTopo">
+          浏览器 / APP → 解密代理 → Burp → 加密代理 → 服务器
+        </div>
+        <div class="proxy-main">
+          <div class="proxy-pane">
+            <div class="proxy-pane-head">启动参数</div>
+            <div class="proxy-form form-grid">
+              <label>项目<select id="proxyProject"></select></label>
+              <label>角色
+                <select id="proxyRole">
+                  <option value="decrypt">解密端</option>
+                  <option value="encrypt">加密端</option>
+                </select>
+              </label>
+              <label>监听端口<input id="proxyPort" type="number" value="8083" /></label>
+              <label>Burp 端口<input id="proxyBurp" type="number" value="8080" /></label>
+            </div>
+            <div class="proxy-actions row gap">
+              <button type="button" class="btn primary" id="btnProxyStart">启动</button>
+              <button type="button" class="btn" id="btnProxyStop">停止</button>
+            </div>
+            <p class="proxy-note muted tiny" id="proxyAuthHint">
+              未授权时只能查看状态；授权后可启停当前项目的解密/加密端。
+            </p>
+          </div>
+          <div class="proxy-pane">
+            <div class="proxy-pane-head">
+              <span>输出</span>
+              <span class="muted tiny" id="proxyOutMeta">就绪</span>
+            </div>
+            <pre class="proxy-out" id="proxyOut"></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- 设置 -->
+      <section id="tab-settings" class="panel">
+        <header class="page-head">
+          <h1>设置</h1>
+          <p>读写 config/settings.yaml（与 GUI 共用）</p>
+        </header>
+        <div class="form-grid">
+          <label>主题
+            <select id="setTheme">
+              <option value="light" selected>浅色</option>
+              <option value="dark">深色</option>
+            </select>
+          </label>
+        </div>
+        <p class="muted tiny" id="themeHint">切换后即时预览，点保存写入 settings.yaml（与 GUI 共用）</p>
+        <button type="button" class="btn primary" id="btnSaveSettings">保存设置</button>
+        <pre class="code out" id="settingsOut"></pre>
+      </section>
+
+      <!-- AI -->
+      <section id="tab-ailab" class="panel">
+        <header class="page-head ai-head">
+          <div>
+            <h1 class="ai-title">AI 分析</h1>
+          </div>
+          <div class="ai-head-actions">
+            <div class="ai-status-pill" id="aiJobMeta">就绪</div>
+            <button type="button" class="btn" id="btnAiCfg">模型配置</button>
+          </div>
+        </header>
+
+        <div class="ai-main">
+          <div class="ai-left">
+            <!-- 大类：网页 / 小程序 / App（对齐 GUI） -->
+            <div class="source-tabs" id="sourceTabs">
+              <button type="button" data-src="web" class="active">网页</button>
+              <button type="button" data-src="mini">小程序</button>
+              <button type="button" data-src="app">App</button>
+            </div>
+
+            <!-- 网页：浏览器条 + 流量/Hook/JS 子类 -->
+            <div class="source-pane active" id="src-web">
+              <div class="browser-bar">
+                <input id="aiUrl" class="url" placeholder="https://目标站点…" />
+                <!-- 注入菜单（对齐 GUI） -->
+                <div class="bb-menu" id="injectMenuWrap">
+                  <button type="button" class="btn" id="btnInjectMenu" title="启动时注入的 Hook / 反调试 / 扩展">注入 ▾</button>
+                  <div class="bb-pop" id="injectMenu" hidden>
+                    <div class="bb-locked muted tiny" id="injectLocked" hidden>已锁定：干净模式（不注入）</div>
+                    <label class="bb-item"><input type="checkbox" id="aiHook" checked /> 密钥 Hook</label>
+                    <label class="bb-item" title="注入 anti_debug；可选响应改写"><input type="checkbox" id="aiAnti" /> 反调试</label>
+                    <label class="bb-item" title="debugger 暂停时记录脚本位置并继续"><input type="checkbox" id="aiCdpSkip" /> CDP 定位 debugger</label>
+                    <label class="bb-item" title="JS/HTML 落地前 debugger→return"><input type="checkbox" id="aiRewrite" /> 响应改写 debugger→return</label>
+                    <div class="bb-sub">
+                      <button type="button" class="bb-sub-btn" data-sub="ext">浏览器扩展 ▸</button>
+                      <div class="bb-sub-pop" id="injectExtSub" hidden>
+                        <label class="bb-item"><input type="checkbox" id="aiVm" checked /> 油猴（暴力猴）</label>
+                        <label class="bb-item"><input type="checkbox" id="aiReres" checked /> ReRes（请求映射）</label>
+                        <label class="bb-item"><input type="checkbox" id="aiCbHook" checked /> 密桥 Hook 扩展</label>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <button type="button" class="btn primary" id="btnBrowserStart">启动</button>
+                <button type="button" class="btn" id="btnBrowserStop">停止</button>
+                <!-- 更多菜单（对齐 GUI） -->
+                <div class="bb-menu" id="moreMenuWrap">
+                  <button type="button" class="btn" id="btnMoreMenu" title="真实浏览器 / CDP / 记录模式 / 引擎">更多 ▾</button>
+                  <div class="bb-pop" id="moreMenu" hidden>
+                    <label class="bb-item" title="不注入 Hook/拟真，适合强 JS 挑战"><input type="checkbox" id="aiRealBrowser" /> 真实浏览器</label>
+                    <div class="bb-sub">
+                      <button type="button" class="bb-sub-btn" data-sub="cdp">系统浏览器 + CDP ▸</button>
+                      <div class="bb-sub-pop" id="moreCdpSub" hidden>
+                        <label class="bb-item"><input type="radio" name="aiCdpMode" value="" checked /> 关闭</label>
+                        <label class="bb-item"><input type="radio" name="aiCdpMode" value="msedge" /> 本机 Edge</label>
+                        <label class="bb-item"><input type="radio" name="aiCdpMode" value="chrome" /> 本机 Chrome</label>
+                      </div>
+                    </div>
+                    <div class="bb-sep"></div>
+                    <label class="bb-item" title="固定 Profile，Cookie/登录态长期复用"><input type="checkbox" id="aiRecord" checked /> 记录模式（持久 Profile）</label>
+                    <div class="bb-sub">
+                      <button type="button" class="bb-sub-btn" data-sub="engine">浏览器引擎 ▸</button>
+                      <div class="bb-sub-pop" id="moreEngineSub" hidden>
+                        <label class="bb-item"><input type="radio" name="aiChannel" value="chromium" checked /> Chromium（内置）</label>
+                        <label class="bb-item"><input type="radio" name="aiChannel" value="chrome" /> 本机 Chrome</label>
+                        <label class="bb-item"><input type="radio" name="aiChannel" value="msedge" /> 本机 Edge</label>
+                      </div>
+                    </div>
+                    <div class="bb-sep"></div>
+                    <label class="bb-item"><input type="checkbox" id="aiMitm" /> 解密代理</label>
+                  </div>
+                </div>
+                <span class="browser-mode muted tiny" id="browserModeHint"></span>
+                <span class="browser-dot" id="browserDot" title="浏览器状态"></span>
+              </div>
+              <div class="seg" id="captureTabs">
+                <button type="button" data-cap="flows" class="active">流量 <span id="capNFlow">0</span></button>
+                <button type="button" data-cap="hooks">Hook <span id="capNHook">0</span></button>
+                <button type="button" data-cap="js">JS <span id="capNJs">0</span></button>
+                <button type="button" data-cap="paste">粘贴</button>
+                <button type="button" data-cap="blog">浏览器日志</button>
+              </div>
+              <div class="cap-pane active" id="cap-flows">
+                <div class="cap-toolbar">
+                  <span class="cap-hint muted">勾选送 AI · 点行看详情</span>
+                  <div class="cap-toolbar-acts">
+                    <button type="button" class="btn ghost sm" id="btnFlowCheckAll">全选</button>
+                    <button type="button" class="btn ghost sm" id="btnFlowCheckNone">全不选</button>
+                  </div>
+                </div>
+                <div class="cap-list tall" id="flowList"></div>
+              </div>
+              <div class="cap-pane" id="cap-js">
+                <div class="cap-toolbar">
+                  <input id="jsFilter" class="cap-filter" placeholder="过滤 URL / 关键字…" />
+                  <div class="cap-toolbar-acts">
+                    <button type="button" class="btn ghost sm" id="btnJsCheckAll">全选</button>
+                    <button type="button" class="btn ghost sm" id="btnJsCheckNone">全不选</button>
+                  </div>
+                </div>
+                <div class="cap-list tall" id="jsList"></div>
+              </div>
+              <div class="cap-pane" id="cap-hooks">
+                <pre class="cap-detail full" id="hookView">（Hook 输出）</pre>
+              </div>
+              <div class="cap-pane" id="cap-paste">
+                <div class="seg" id="aiMaterialMode">
+                  <button type="button" data-mat="http" class="active">HTTP</button>
+                  <button type="button" data-mat="js">JS</button>
+                </div>
+                <textarea id="aiMaterial" class="ai-paste" spellcheck="false" placeholder="离线粘贴报文或 JS…"></textarea>
+                <div class="ai-actions">
+                  <input id="aiScriptUrl" class="grow" placeholder="JS URL（可选）" hidden />
+                  <button type="button" class="btn primary" id="btnAiAddMaterial">加入会话</button>
+                  <button type="button" class="btn" id="btnAiImportParser">从解析器导入</button>
+                  <button type="button" class="btn ghost" id="btnAiClearSession">清空素材</button>
+                </div>
+                <div class="ai-counters" id="aiSessionCards"></div>
+              </div>
+              <div class="cap-pane" id="cap-blog">
+                <pre class="cap-detail full" id="browserLog">（浏览器日志）</pre>
+              </div>
+            </div>
+
+            <!-- 小程序大类 -->
+            <div class="source-pane" id="src-mini">
+              <div class="rev-bar">
+                <button type="button" class="btn" id="btnMiniRefresh">刷新列表</button>
+                <span class="muted" id="miniStatus">扫描本机微信小程序包</span>
+              </div>
+              <div class="seg" id="miniSubTabs">
+                <button type="button" data-msub="list" class="active">小程序</button>
+                <button type="button" data-msub="hits">候选 JS</button>
+                <button type="button" data-msub="log">日志</button>
+              </div>
+              <div class="mini-sub active" id="msub-list">
+                <div class="cap-hint muted">点「解包」注入脚本到 AI 会话</div>
+                <div class="cap-list tall" id="miniList"></div>
+              </div>
+              <div class="mini-sub" id="msub-hits">
+                <div class="cap-list tall" id="miniHits"></div>
+              </div>
+              <div class="mini-sub" id="msub-log">
+                <pre class="cap-detail full" id="miniLog">（解包日志）</pre>
+              </div>
+            </div>
+
+            <!-- App 大类 -->
+            <div class="source-pane" id="src-app">
+              <div class="rev-bar">
+                <input id="apkPath" class="grow" placeholder="本机 APK 绝对路径，如 D:\app\demo.apk" />
+                <button type="button" class="btn" id="btnAppTools">工具状态</button>
+                <button type="button" class="btn primary" id="btnAppDecode">反编译并扫描</button>
+              </div>
+              <div class="muted tiny" id="appToolsHint">需要本机 Java + apktool（tools 目录）</div>
+              <div class="seg" id="appSubTabs">
+                <button type="button" data-asub="hits" class="active">加解密候选</button>
+                <button type="button" data-asub="log">日志</button>
+              </div>
+              <div class="app-sub active" id="asub-hits">
+                <div class="cap-list tall" id="appHits"></div>
+              </div>
+              <div class="app-sub" id="asub-log">
+                <pre class="cap-detail full" id="appLog">（反编译日志）</pre>
+              </div>
+            </div>
+          </div>
+
+          <div class="ai-right">
+            <div class="ai-block compact ai-agent-head">
+              <div class="ai-block-title ai-agent-title">
+                <strong>Agent 模式</strong>
+                <span class="muted tiny" id="aiModeDesc">点卡片启动对应任务</span>
+                <div class="ai-title-actions">
+                  <button type="button" class="btn primary ai-act-btn" id="btnAnalyzeCrypto" title="选字段 → 分析并生成解密/加密 plugin">
+                    <svg class="ai-ico" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1.5a.75.75 0 0 1 .75.75v1.06a4.75 4.75 0 0 1 3.94 3.94h1.06a.75.75 0 0 1 0 1.5h-1.06a4.75 4.75 0 0 1-3.94 3.94v1.06a.75.75 0 0 1-1.5 0v-1.06A4.75 4.75 0 0 1 3.31 8.75H2.25a.75.75 0 0 1 0-1.5H3.31A4.75 4.75 0 0 1 7.25 3.31V2.25A.75.75 0 0 1 8 1.5Zm0 3a3.25 3.25 0 1 0 0 6.5 3.25 3.25 0 0 0 0-6.5Z"/></svg>
+                    <span id="btnAnalyzeCryptoLabel">分析</span>
+                  </button>
+                  <button type="button" class="btn ai-act-btn" id="btnRecognize" title="选字段 → 识别算法/字段">
+                    <svg class="ai-ico" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M6.5 2a4.5 4.5 0 0 1 3.58 7.22l2.85 2.85a.75.75 0 1 1-1.06 1.06l-2.85-2.85A4.5 4.5 0 1 1 6.5 2Zm0 1.5a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z"/></svg>
+                    识别
+                  </button>
+                  <button type="button" class="btn ghost ai-act-btn" id="btnAiStop" title="停止当前 Agent">
+                    <svg class="ai-ico" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M4.5 3.75A.75.75 0 0 1 5.25 3h5.5a.75.75 0 0 1 .75.75v8.5a.75.75 0 0 1-.75.75h-5.5a.75.75 0 0 1-.75-.75v-8.5Z"/></svg>
+                    停止
+                  </button>
+                </div>
+              </div>
+              <div class="mode-grid" id="aiModeGrid"></div>
+              <select id="aiMode" hidden></select>
+              <textarea id="aiGoal" hidden rows="1" placeholder="留空用默认任务"></textarea>
+              <button type="button" class="btn" id="btnAiRun" hidden>按当前模式开始</button>
+            </div>
+
+            <div class="ai-block compact grow">
+              <div class="seg seg-wrap" id="aiOutTabs">
+                <button type="button" data-out="log" class="active">过程</button>
+                <button type="button" data-out="ctx">上下文</button>
+                <button type="button" data-out="result">结果</button>
+                <button type="button" data-out="code">源码定位</button>
+                <button type="button" data-out="hook">Hook</button>
+                <button type="button" data-out="plugin">插件</button>
+              </div>
+              <div class="ai-out-stack">
+                <pre class="ai-out grow-out" id="aiLog"></pre>
+                <div class="ai-out grow-out" id="aiCtx" hidden>
+                  <div class="ctx-hint muted">双击一行查看该轮请求/响应</div>
+                  <div class="ctx-table-wrap">
+                    <table class="ctx-table" id="aiCtxTable">
+                      <thead>
+                        <tr><th>#</th><th>类型</th><th>摘要</th><th>请求</th><th>响应</th></tr>
+                      </thead>
+                      <tbody id="aiCtxBody"></tbody>
+                    </table>
+                  </div>
+                </div>
+                <pre class="ai-out grow-out" id="aiResult" hidden></pre>
+                <pre class="ai-out grow-out" id="aiCodeLoc" hidden>（源码位置）</pre>
+                <pre class="ai-out grow-out" id="aiHookOut" hidden>（Hook）</pre>
+                <pre class="ai-out grow-out" id="aiPluginOut" hidden>（插件 steps 预览）</pre>
+              </div>
+              <div class="ai-composer" id="aiComposer">
+                <select id="aiChatMode" title="对话模式（与上方卡片联动）">
+                  <option value="chat">加解密</option>
+                  <option value="anti_debug">反调试</option>
+                  <option value="bot_bypass">绕过检查</option>
+                  <option value="fingerprint_hook">指纹绕过</option>
+                  <option value="js_reverse">JS逆向</option>
+                  <option value="js_deobfuscate">JS解密</option>
+                  <option value="hash_hook">Hash Hook</option>
+                </select>
+                <input id="aiChatInput" type="text" placeholder="输入任务，回车发送…" autocomplete="off" />
+                <button type="button" class="btn primary" id="btnAiSend">发送</button>
+                <button type="button" class="btn" id="btnAiComposerStop">停止</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <!-- 加解密自动验证（对齐 GUI：字段表 + 请求/响应 + 继续生成） -->
+  <div class="float-mask" id="verifyMask" hidden>
+    <div class="float-card verify-card" role="dialog" aria-modal="true">
+      <div class="float-head">
+        <div class="float-title" id="verifyTitle">加解密自动验证</div>
+        <div class="float-actions">
+          <button type="button" class="btn ghost" id="btnVerifyClose">取消</button>
+        </div>
+      </div>
+      <div class="verify-body">
+        <div class="verify-tip" id="verifyTip" hidden></div>
+        <div class="verify-summary" id="verifySummary"></div>
+        <div class="verify-meta muted" id="verifyMeta"></div>
+        <div class="seg" id="verifySideTabs">
+          <button type="button" data-vside="req" class="active">请求数据</button>
+          <button type="button" data-vside="resp">响应数据</button>
+        </div>
+        <div class="verify-side" id="verifySideReq">
+          <div class="verify-msg muted" id="verifyReqMsg"></div>
+          <div class="verify-table-wrap">
+            <table class="verify-table">
+              <thead><tr><th>字段</th><th>结果</th><th>加解密方式</th><th>说明</th><th>处理后预览</th></tr></thead>
+              <tbody id="verifyReqFields"></tbody>
+            </table>
+          </div>
+          <div class="seg verify-io-tabs" data-for="req">
+            <button type="button" data-vio="before" class="active">处理前</button>
+            <button type="button" data-vio="after">处理后</button>
+          </div>
+          <pre class="verify-pre" id="verifyReqIo"></pre>
+        </div>
+        <div class="verify-side" id="verifySideResp" hidden>
+          <div class="verify-msg muted" id="verifyRespMsg"></div>
+          <div class="verify-table-wrap">
+            <table class="verify-table">
+              <thead><tr><th>字段</th><th>结果</th><th>加解密方式</th><th>说明</th><th>处理后预览</th></tr></thead>
+              <tbody id="verifyRespFields"></tbody>
+            </table>
+          </div>
+          <div class="seg verify-io-tabs" data-for="resp">
+            <button type="button" data-vio="before" class="active">处理前</button>
+            <button type="button" data-vio="after">处理后</button>
+          </div>
+          <pre class="verify-pre" id="verifyRespIo"></pre>
+        </div>
+      </div>
+      <div class="verify-foot" id="verifyFoot">
+        <button type="button" class="btn" id="btnVerifyAnalyzeEncrypt" hidden title="由解密步骤反推加密，并与原密文对照">分析加密</button>
+        <button type="button" class="btn primary" id="btnVerifyOk" hidden>验证通过、生成解密代码</button>
+        <button type="button" class="btn danger" id="btnVerifyForce" hidden>验证未通过，仍要继续</button>
+        <button type="button" class="btn" id="btnVerifyCancel">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 生成解密/加密脚本（对齐 GUI） -->
+  <div class="float-mask" id="genMask" hidden>
+    <div class="float-card gen-card" role="dialog" aria-modal="true">
+      <div class="float-head">
+        <div class="float-title" id="genTitle">生成解密脚本</div>
+        <div class="float-actions">
+          <button type="button" class="btn ghost" id="btnGenClose">取消</button>
+        </div>
+      </div>
+      <div class="gen-body">
+        <label class="gen-row" id="genNameRow">项目名称
+          <input id="genProjectName" placeholder="支持中文 / 英文 / 数字 / 下划线" />
+        </label>
+        <label class="gen-row" id="genDecNameRow" hidden>解密项目名称
+          <input id="genDecryptName" placeholder="解密端项目名称" />
+        </label>
+        <label class="gen-row" id="genEncNameRow" hidden>加密项目名称
+          <input id="genEncryptName" placeholder="加密端项目名称" />
+        </label>
+        <div class="gen-row">脚本类型
+          <div class="gen-val" id="genScriptType">解密脚本</div>
+        </div>
+        <div class="gen-row">匹配规则
+          <pre class="gen-match" id="genMatchRules"></pre>
+        </div>
+      </div>
+      <div class="verify-foot">
+        <button type="button" class="btn primary" id="btnGenOk">OK</button>
+        <button type="button" class="btn" id="btnGenCancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 流量 / JS 悬浮详情（流量为 Burp 请求/响应） -->
+  <div class="float-mask" id="floatMask" hidden>
+    <div class="float-card" role="dialog" aria-modal="true">
+      <div class="float-head">
+        <div class="float-title" id="floatTitle">详情</div>
+        <div class="float-actions">
+          <button type="button" class="btn ghost" id="btnFloatCopy">复制</button>
+          <button type="button" class="btn" id="btnFloatClose">关闭</button>
+        </div>
+      </div>
+      <div class="seg float-tabs" id="floatTabs" hidden>
+        <button type="button" data-ftab="req" class="active">Request</button>
+        <button type="button" data-ftab="resp">Response</button>
+        <button type="button" data-ftab="raw">Raw</button>
+      </div>
+      <pre class="float-body" id="floatBody"></pre>
+    </div>
+  </div>
+
+  <!-- 指定加解密字段（布局对齐桌面 GUI） -->
+  <div class="float-mask" id="ftMask" hidden>
+    <div class="float-card ft-card" role="dialog" aria-modal="true">
+      <div class="ft-top">
+        <div class="ft-top-left">
+          <div class="ft-win-title">指定加解密字段</div>
+          <div class="ft-top-row">
+            <span class="ft-scope-lab" title="选请求 → 请求/响应 → 点字段；算法密钥仍由 AI 分析">缩小 AI 分析范围</span>
+            <label class="chk tight" title="不限定字段，保持盲目分析"><input type="checkbox" id="ftSkip" /> 跳过指定</label>
+          </div>
+        </div>
+        <div class="ft-status-chip" id="ftStatus">尚未选字段</div>
+      </div>
+
+      <div class="ft-body" id="ftContent">
+        <div class="ft-left">
+          <div class="ft-panel-title">请求</div>
+          <div class="ft-flow-tools">
+            <select id="ftSort" title="列表排序">
+              <option value="seq_asc">顺序↑</option>
+              <option value="seq_desc">顺序↓</option>
+              <option value="url">URL</option>
+              <option value="method">方法</option>
+            </select>
+            <span class="muted tiny" id="ftFlowCount">共 0 条</span>
+          </div>
+          <div class="ft-flow-list" id="ftFlowList"></div>
+        </div>
+
+        <div class="ft-right">
+          <div class="ft-panel-title">字段</div>
+          <div class="ft-ctrl">
+            <div class="ft-seg" id="ftSide">
+              <button type="button" data-side="request" class="active">请求</button>
+              <button type="button" data-side="response">响应</button>
+            </div>
+            <div class="ft-seg ft-seg-role" id="ftRole">
+              <button type="button" data-role="decrypt" class="active" title="高亮「解密」：勾选字段后确认 → 分析并生成解密端">解密</button>
+              <button type="button" data-role="resp_decrypt" title="高亮「响应解密」：勾选响应字段 → 按解密端分析">响应解密</button>
+              <button type="button" data-role="encrypt" title="高亮「加密」：勾选字段后确认 → 分析并生成加密端">加密</button>
+            </div>
+          </div>
+          <div class="ft-colhead"><span></span><span>字段</span><span>值</span></div>
+          <div class="ft-tree" id="ftFieldList"></div>
+          <div class="ft-picked-bar">
+            <span class="ft-panel-title">已选</span>
+            <button type="button" class="btn ghost" id="btnFtClear">清空</button>
+          </div>
+          <div class="ft-picked-box" id="ftPicked"></div>
+        </div>
+      </div>
+
+      <div class="ft-empty" id="ftEmpty" hidden>无可用流量，请先勾选含 Body 的请求，或勾选「跳过指定」。</div>
+      <div class="ft-foot">
+        <button type="button" class="btn ghost" id="btnFtCancel">取消</button>
+        <button type="button" class="btn primary" id="btnFtOk">确认</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 字段加解密配置（对齐 GUI：点字段值弹出） -->
+  <div class="float-mask" id="fieldOpMask" hidden>
+    <div class="float-card field-op-card" role="dialog" aria-modal="true">
+      <div class="float-head">
+        <div class="float-title" id="fieldOpTitle">添加加解密</div>
+        <div class="float-actions">
+          <button type="button" class="btn ghost" id="btnFieldOpClose">取消</button>
+        </div>
+      </div>
+      <div class="field-op-body">
+        <div>
+          <div class="muted tiny">字段值</div>
+          <div class="field-op-val" id="fieldOpValue"></div>
+        </div>
+        <label>操作类型
+          <select id="fieldOpType"></select>
+        </label>
+        <div class="form-grid" id="fieldOpParams"></div>
+        <div class="field-op-test" id="fieldOpTest">填好密钥后可点「测试」预览</div>
+      </div>
+      <div class="field-op-foot">
+        <button type="button" class="btn" id="btnFieldOpTest">测试</button>
+        <span class="grow"></span>
+        <button type="button" class="btn" id="btnFieldOpCancel">取消</button>
+        <button type="button" class="btn primary" id="btnFieldOpOk">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- AI 浏览器绕过 Agent（同 GUI 独立窗口） -->
+  <div class="float-mask" id="bypassMask" hidden>
+    <div class="float-card bypass-card" role="dialog" aria-modal="true" id="bypassCard">
+      <div class="bypass-head">
+        <div class="bypass-brand">
+          <span class="bypass-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 2a5 5 0 0 1 5 5v1.1A4.5 4.5 0 0 1 20.5 12.5V17a5 5 0 0 1-5 5h-7a5 5 0 0 1-5-5v-4.5A4.5 4.5 0 0 1 7 8.1V7a5 5 0 0 1 5-5Zm0 2a3 3 0 0 0-3 3v1.05c.32-.04.65-.05 1-.05h4c.35 0 .68.01 1 .05V7a3 3 0 0 0-3-3Zm-3.5 6.5A2.5 2.5 0 0 0 6 13v4a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3v-4a2.5 2.5 0 0 0-2.5-2.5h-7Z"/></svg>
+          </span>
+          <div class="bypass-titles">
+            <div class="bypass-title">AI 浏览器绕过 Agent</div>
+            <div class="bypass-sub">策略扫描 · 实时通关 · 与桌面版同款能力</div>
+          </div>
+        </div>
+        <div class="float-actions">
+          <button type="button" class="btn ghost" id="btnBypassClose" title="关闭">关闭</button>
+        </div>
+      </div>
+
+      <div class="bypass-toolbar">
+        <div class="bypass-url-wrap">
+          <span class="bypass-field-lab">目标</span>
+          <input id="bypassUrl" placeholder="https://example.com" />
+        </div>
+        <div class="bypass-opts" role="group" aria-label="启动选项">
+          <label class="bypass-pill"><input type="checkbox" id="bypassHeadless" /><span>无头</span></label>
+          <label class="bypass-pill"><input type="checkbox" id="bypassStealth" checked /><span>拟真</span></label>
+          <label class="bypass-pill"><input type="checkbox" id="bypassMitm" /><span>解密代理</span></label>
+          <label class="bypass-pill"><input type="checkbox" id="bypassSweep" checked /><span>全量扫描</span></label>
+        </div>
+      </div>
+
+      <div class="bypass-status" id="bypassStatus" data-kind="idle">
+        <span class="bypass-status-dot" aria-hidden="true"></span>
+        <span class="bypass-status-text">就绪 · 填写 URL 后开始通关或只扫策略</span>
+      </div>
+
+      <div class="bypass-workspace">
+        <section class="bypass-col bypass-col-log">
+          <div class="bypass-col-head">
+            <span class="bypass-col-title">过程</span>
+            <span class="bypass-col-hint">策略矩阵 / Agent 步骤</span>
+          </div>
+          <pre class="bypass-log" id="bypassLog"></pre>
+        </section>
+        <section class="bypass-col bypass-col-out">
+          <div class="bypass-col-head">
+            <div class="seg bypass-tabs" id="bypassTabs">
+              <button type="button" data-btab="summary" class="active">结论</button>
+              <button type="button" data-btab="json">JSON</button>
+              <button type="button" data-btab="hook">hook_js</button>
+            </div>
+          </div>
+          <pre class="bypass-pane" id="bypassSummary"></pre>
+          <pre class="bypass-pane" id="bypassJson" hidden></pre>
+          <pre class="bypass-pane" id="bypassHook" hidden></pre>
+        </section>
+      </div>
+
+      <div class="bypass-composer">
+        <input id="bypassFollow" type="text" placeholder="追问 / 自定义目标，例如：打开该页并等到主内容可见…" autocomplete="off" />
+        <button type="button" class="btn" id="btnBypassFollow">追问</button>
+      </div>
+
+      <div class="bypass-foot">
+        <div class="bypass-foot-left">
+          <button type="button" class="btn primary" id="btnBypassStart">开始通关</button>
+          <button type="button" class="btn" id="btnBypassSweepOnly">只扫策略</button>
+          <button type="button" class="btn ghost" id="btnBypassStop" disabled>停止</button>
+        </div>
+        <button type="button" class="btn ghost" id="btnBypassClose2">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 模型配置悬浮 -->
+  <div class="float-mask" id="cfgFloatMask" hidden>
+    <div class="float-card cfg-card" role="dialog" aria-modal="true">
+      <div class="float-head">
+        <div class="float-title">模型配置 <span class="muted" id="aiCfgHint"></span></div>
+        <div class="float-actions">
+          <button type="button" class="btn" id="btnCfgFloatClose">关闭</button>
+        </div>
+      </div>
+      <div class="cfg-float-body">
+        <div class="form-grid">
+          <label>API Key<input id="aiKey" type="password" autocomplete="off" /></label>
+          <label>模型<input id="aiModel" /></label>
+          <label class="span2">Base URL<input id="aiBase" /></label>
+          <label>格式
+            <select id="aiFmt">
+              <option value="deepseek">deepseek</option>
+              <option value="newapi">newapi</option>
+              <option value="custom">custom</option>
+            </select>
+          </label>
+          <label>最大步数<input id="aiSteps" type="number" value="50" /></label>
+          <label class="chk"><input type="checkbox" id="aiUseProxy" /> LLM HTTP 代理</label>
+          <label>代理地址<input id="aiProxy" placeholder="127.0.0.1:7897" /></label>
+          <p class="muted tiny span2">注入 / 扩展 / CDP 等选项请在浏览器条「注入」「更多」菜单中设置</p>
+        </div>
+        <button type="button" class="btn primary" id="btnAiSaveCfg">保存配置</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js?v=56"></script>
+</body>
+</html>

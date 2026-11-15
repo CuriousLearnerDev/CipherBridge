@@ -1,0 +1,24 @@
+# 模板: SM4-ECB + PKCS7 + Base64 (国密)
+name: myapp_sm4
+description: "我的APP (SM4国密)"
+
+proxy:
+  decrypt_port: 8080
+  encrypt_port: 8081
+  decrypt_forward: "http://127.0.0.1:8080"
+
+match:
+  methods: [POST]
+  require_fields: [data]
+
+request:
+  body_format: json
+  encryption:
+    algorithm: SM4
+    mode: ECB
+    key: "your-16-byte-key!"
+    padding: PKCS7
+    fields: [data]
+
+response:
+  body_format: json

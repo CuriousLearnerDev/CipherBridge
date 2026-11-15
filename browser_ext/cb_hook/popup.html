@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>CipherBridge</title>
+  <style>
+    :root {
+      --bg: #1e1f22;
+      --surface: #2b2d30;
+      --border: #45484c;
+      --text: #bcbec4;
+      --dim: #8a8f98;
+      --primary: #3574f0;
+      --ok: #499c54;
+      --warn: #c29d4a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      width: 300px;
+      font: 12px/1.45 "Segoe UI", "Microsoft YaHei UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    header {
+      padding: 12px 14px 10px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    h1 { margin: 0; font-size: 14px; font-weight: 700; }
+    .sub { margin-top: 3px; color: var(--dim); font-size: 11px; }
+    .master, .section {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .master {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .master label { font-weight: 600; }
+    .sec-title {
+      font-weight: 600;
+      margin: 0 0 8px;
+      font-size: 12px;
+    }
+    .modes { display: grid; gap: 6px; }
+    .mode {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 8px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      cursor: pointer;
+      background: var(--bg);
+    }
+    .mode:hover { border-color: var(--primary); }
+    .mode input { margin: 0; }
+    .row {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+      align-items: center;
+    }
+    .row label { color: var(--dim); width: 36px; flex-shrink: 0; }
+    .row input {
+      flex: 1;
+      min-width: 0;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 4px;
+      padding: 5px 8px;
+      font-size: 12px;
+    }
+    .row input.port { flex: 0 0 72px; }
+    .sw {
+      position: relative;
+      width: 36px;
+      height: 20px;
+      flex-shrink: 0;
+    }
+    .sw input { opacity: 0; width: 0; height: 0; }
+    .sw i {
+      position: absolute;
+      inset: 0;
+      background: #3c3f41;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: 0.15s;
+    }
+    .sw i::after {
+      content: "";
+      position: absolute;
+      width: 14px;
+      height: 14px;
+      left: 3px;
+      top: 3px;
+      background: #fff;
+      border-radius: 50%;
+      transition: 0.15s;
+    }
+    .sw input:checked + i { background: var(--primary); }
+    .sw input:checked + i::after { transform: translateX(16px); }
+    .note {
+      padding: 10px 14px 12px;
+      color: var(--dim);
+      font-size: 10px;
+      line-height: 1.45;
+    }
+    footer {
+      padding: 10px 14px 12px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      border-top: 1px solid var(--border);
+    }
+    button {
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      border-radius: 4px;
+      padding: 5px 10px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    button.primary {
+      background: var(--primary);
+      border-color: var(--primary);
+      color: #fff;
+      font-weight: 600;
+    }
+    button:hover { filter: brightness(1.08); }
+    #msg { flex: 1; color: var(--ok); font-size: 11px; min-height: 14px; }
+    #msg.err { color: #c45c5c; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>CipherBridge Hook</h1>
+    <div class="sub">注入开关 · 代理切换（无需重启浏览器）</div>
+  </header>
+
+  <div class="master">
+    <label for="cbEnabled">启用页面注入</label>
+    <label class="sw"><input type="checkbox" id="cbEnabled" checked /><i></i></label>
+  </div>
+
+  <div class="section">
+    <p class="sec-title">流量代理</p>
+    <div class="modes">
+      <label class="mode"><input type="radio" name="proxyMode" value="direct" checked />直连（不走代理）</label>
+      <label class="mode"><input type="radio" name="proxyMode" value="decrypt" />解密端（密桥 mitm）</label>
+      <label class="mode"><input type="radio" name="proxyMode" value="burp" />Burp</label>
+      <label class="mode"><input type="radio" name="proxyMode" value="custom" />自定义</label>
+    </div>
+    <div class="row">
+      <label>Host</label>
+      <input id="proxyHost" value="127.0.0.1" />
+      <input class="port" id="proxyPort" type="number" min="1" max="65535" value="8083" />
+    </div>
+  </div>
+
+  <p class="note">
+    解密端默认 127.0.0.1:8083，Burp 默认 :8080。切换后新请求立即生效；若页面已打开可刷新。
+    请先在密桥启动对应端口。
+  </p>
+
+  <footer>
+    <button type="button" class="primary" id="btnSave">应用</button>
+    <button type="button" id="btnReset">恢复默认</button>
+    <div id="msg"></div>
+  </footer>
+  <script src="popup.js"></script>
+</body>
+</html>

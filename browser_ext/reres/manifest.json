@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "ReRes",
+  "version": "2.0.0",
+  "description": "密桥内置 ReRes（MV3）：按规则把请求 URL 映射到其它地址。原版为 Manifest V2，新 Chromium 无法加载，故提供兼容版。",
+  "action": {
+    "default_title": "ReRes",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon.png",
+      "48": "icon48.png"
+    }
+  },
+  "background": {
+    "service_worker": "sw.js"
+  },
+  "icons": {
+    "16": "icon.png",
+    "48": "icon48.png"
+  },
+  "permissions": [
+    "storage",
+    "declarativeNetRequest",
+    "declarativeNetRequestWithHostAccess"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ]
+}

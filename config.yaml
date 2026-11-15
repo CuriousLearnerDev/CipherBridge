@@ -1,0 +1,20 @@
+# ============================================================
+# 密桥 CipherBridge — 配置文件 (main.py 框架模式)
+# ============================================================
+#
+# 启动方式 (命令行):
+#   解密端: PROXY_ROLE=decrypt PROFILE=myapp mitmdump -s main.py -p 8083
+#   加密端: PROXY_ROLE=encrypt PROFILE=myapp mitmdump -s main.py -p 8081
+#
+# 推荐通过 GUI 可视化构建器生成 plugins/{name}/plugin.py 后直接使用 plugin 模式.
+# 也可复制 profiles/_template_aes_ecb.yaml 为 profiles/myapp.yaml 后在此引用.
+
+mode: decrypt
+
+forward:
+  decrypt_to: "http://127.0.0.1:8080"
+  encrypt_to: null
+  timeout: 30
+
+# 按优先级排列；GUI 插件模式不依赖此列表
+apps: []
